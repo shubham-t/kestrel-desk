@@ -67,7 +67,13 @@ LLM_API_KEY=<internal key>
 LLM_MODEL=<internal model id>
 LLM_SUBAGENT_MODEL=<same id, or a cheaper one on the same endpoint>
 LLM_EXTRA_HEADERS={"X-Team": "platform"}                # only if the gateway needs headers
+LLM_EXTRA_BODY=                                         # clear this: it holds Anthropic-only fields
 ```
+
+`LLM_EXTRA_BODY` is JSON merged into every request body for provider-specific settings. The
+Anthropic setup uses `{"output_config": {"effort": "medium"}}` (medium reasoning effort for
+Sonnet 5.5); clear it on an endpoint that rejects unknown fields. Defaults are `claude-sonnet-5-5`
+for the agent and `claude-haiku-5-5` for the subagent.
 
 What the endpoint must support: `POST /chat/completions` with `stream=true`, function
 `tools` / streamed `tool_calls`, and `max_tokens`. The harness sends nothing else

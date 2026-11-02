@@ -126,7 +126,7 @@ class _Run:
         ct = max(12, int(len(text.split()) * 1.4)) + random.randint(8, 30)
         self.prompt_tokens += pt
         self.completion_tokens += ct
-        model = "claude-sonnet-5-5" if self.sub else "claude-opus-5-5"
+        model = "claude-haiku-5-5" if self.sub else "claude-sonnet-5-5"
         await self.emit("usage", {"model": model, "prompt_tokens": pt, "completion_tokens": ct}, "model")
         await self.checkpoint()
         return text
@@ -475,7 +475,7 @@ class MockBackend:
             "messages": [{"role": "user" if i % 2 == 0 else "assistant", "content": c} for i, c in enumerate(convo)]}}
 
     def meta(self) -> dict:
-        return {"model": "claude-opus-5-5", "base_url_host": "offline rehearsal", "mock": True,
+        return {"model": "claude-sonnet-5-5", "base_url_host": "offline rehearsal", "mock": True,
                 "stages": HARNESS_STAGES, "roles": ROLES, "scenarios": SCENARIOS, "snippets": SNIPPETS}
 
     def new_agent(self, stage: int, role: str, session_id: str, resume: bool):

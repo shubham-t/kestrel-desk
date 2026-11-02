@@ -70,18 +70,22 @@ class OpenAICompatibleLLM:
     """Any OpenAI-compatible chat-completions endpoint (Anthropic's compat layer by default)."""
 
     def __init__(self, *, model: str, base_url: str, api_key: str | None, max_tokens: int,
-                 extra_headers: dict | None = None):
+                 extra_headers: dict | None = None, extra_body: dict | None = None):
         self.model = model
         self.base_url = base_url
         self._api_key = api_key
         self.max_tokens = max_tokens
         self.extra_headers = dict(extra_headers or {})
+        # Provider-specific request fields (LLM_EXTRA_BODY), e.g. Anthropic's output_config.effort.
+        # Empty by default so the request stays portable across OpenAI-compatible endpoints.
+        self.extra_body = dict(extra_body or {})
         self._client = None  # created lazily: no key is needed until a real call happens
 
     def for_model(self, model: str) -> "OpenAICompatibleLLM":
         """Same endpoint, different model (subagents use a cheaper one)."""
         return OpenAICompatibleLLM(model=model, base_url=self.base_url, api_key=self._api_key,
-                                   max_tokens=self.max_tokens, extra_headers=self.extra_headers)
+                                   max_tokens=self.max_tokens, extra_headers=self.extra_headers,
+                                   extra_body=self.extra_body)
 
     def _get_client(self):
         if not self._api_key:
@@ -104,6 +108,8 @@ class OpenAICompatibleLLM:
         if tools:
             request["tools"] = [{"type": "function", "function": {
                 "name": t.name, "description": t.description, "parameters": t.parameters}} for t in tools]
+        if self.extra_body:
+            request["extra_body"] = self.extra_body
         partial: dict[int, dict] = {}
         usage: Usage | None = None
         finish: str | None = None
@@ -193,4 +199,4 @@ def make_llm(model: str | None = None) -> OpenAICompatibleLLM:
     """Build the real client from settings (.env)."""
     return OpenAICompatibleLLM(model=model or settings.model, base_url=settings.base_url,
                                api_key=settings.api_key, max_tokens=settings.max_tokens,
-                               extra_headers=settings.extra_headers)
+                               extra_headers=settings.extra_headers, extra_body=settings.extra_body)

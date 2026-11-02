@@ -611,7 +611,7 @@ function snippetSlide(stage, section, { heading, titleStart, line, notes, maxH =
   T(s, [{ text: "Your laptop  ", options: { bold: true, color: P.forest } }, { text: "the internal model", options: { color: P.ink } }], ex + 0.25, y + h - 0.62, ew - 0.4, 0.72, { fontSize: 18, valign: "middle" });
   codeBlock(s, {
     y: 4.45, maxPt: 20, maxH: 1.9,
-    code: "# .env: the only thing you change on the org laptop\nLLM_BASE_URL=https://api.anthropic.com/v1/\nLLM_MODEL=claude-opus-5-5\nLLM_API_KEY=<your key>",
+    code: "# .env: the only thing you change on the org laptop\nLLM_BASE_URL=https://api.anthropic.com/v1/\nLLM_MODEL=claude-sonnet-5-5\nLLM_API_KEY=<your key>",
     caption: ".env  (read by harness/config.py; names are the real ones)",
   });
 }

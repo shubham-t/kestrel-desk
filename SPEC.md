@@ -6,7 +6,7 @@ stage. **Everything in the harness is our own code** (the point of the talk); th
 model dependency is the `openai` Python SDK speaking the OpenAI chat-completions protocol.
 
 Today it runs against Anthropic's OpenAI-compatible endpoint
-(`base_url=https://api.anthropic.com/v1/`, model `claude-opus-5-5`). On the presenter's
+(`base_url=https://api.anthropic.com/v1/`, model `claude-sonnet-5-5` at medium effort). On the presenter's
 org laptop it will run against an internal OpenAI-compatible endpoint by changing **only**
 `.env`. Nothing outside `harness/llm.py` may know which provider is behind the URL.
 
@@ -67,8 +67,9 @@ Loaded with `python-dotenv` from `.env` at `REPO_ROOT`. Dataclass `Settings` (fr
 |---|---|---|
 | `LLM_BASE_URL` | `https://api.anthropic.com/v1/` | OpenAI-compatible base URL. **The portability seam.** |
 | `LLM_API_KEY` | falls back to `ANTHROPIC_API_KEY`, then `OPENAI_API_KEY` | bearer key |
-| `LLM_MODEL` | `claude-opus-5-5` | main agent model id |
-| `LLM_SUBAGENT_MODEL` | `claude-sonnet-5-5` | cheaper model for subagents |
+| `LLM_MODEL` | `claude-sonnet-5-5` | main agent model id |
+| `LLM_SUBAGENT_MODEL` | `claude-haiku-5-5` | cheaper model for subagents |
+| `LLM_EXTRA_BODY` | empty | JSON merged into every chat-completions request body, for provider-specific knobs; e.g. `{"output_config": {"effort": "medium"}}` on Anthropic. Leave empty for endpoints that reject unknown fields. |
 | `LLM_MAX_TOKENS` | `4096` | per call |
 | `LLM_EXTRA_HEADERS` | empty | JSON object; e.g. `{"anthropic-workspace-id": "..."}` |
 | `KESTREL_COMPACT_AT_TOKENS` | `6000` | prompt-token threshold that triggers compaction (low on purpose so the demo shows it) |

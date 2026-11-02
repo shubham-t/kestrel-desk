@@ -27,17 +27,22 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, "").strip() or default
 
 
-def _extra_headers() -> dict[str, str]:
-    raw = _env("LLM_EXTRA_HEADERS")
+def _json_object(var: str) -> dict:
+    """Parse an optional JSON-object env var; empty means {}."""
+    raw = _env(var)
     if not raw:
         return {}
     try:
-        headers = json.loads(raw)
+        value = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM_EXTRA_HEADERS must be a JSON object: {exc}") from exc
-    if not isinstance(headers, dict):
-        raise ValueError("LLM_EXTRA_HEADERS must be a JSON object")
-    return {str(k): str(v) for k, v in headers.items()}
+        raise ValueError(f"{var} must be a JSON object: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError(f"{var} must be a JSON object")
+    return value
+
+
+def _extra_headers() -> dict[str, str]:
+    return {str(k): str(v) for k, v in _json_object("LLM_EXTRA_HEADERS").items()}
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,7 @@ class Settings:
     subagent_model: str
     max_tokens: int
     extra_headers: dict[str, str]
+    extra_body: dict  # provider-specific request fields (e.g. Anthropic's output_config.effort); empty = portable
     compact_at_tokens: int
     keep_last_messages: int
 
@@ -57,10 +63,11 @@ class Settings:
         return cls(
             base_url=_env("LLM_BASE_URL", "https://api.anthropic.com/v1/"),
             api_key=key or None,
-            model=_env("LLM_MODEL", "claude-opus-5-5"),
-            subagent_model=_env("LLM_SUBAGENT_MODEL", "claude-sonnet-5-5"),
+            model=_env("LLM_MODEL", "claude-sonnet-5-5"),
+            subagent_model=_env("LLM_SUBAGENT_MODEL", "claude-haiku-5-5"),
             max_tokens=int(_env("LLM_MAX_TOKENS", "4096")),
             extra_headers=_extra_headers(),
+            extra_body=_json_object("LLM_EXTRA_BODY"),
             compact_at_tokens=int(_env("KESTREL_COMPACT_AT_TOKENS", "6000")),
             keep_last_messages=int(_env("KESTREL_KEEP_LAST_MESSAGES", "6")),
         )
