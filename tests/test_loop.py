@@ -184,6 +184,21 @@ async def test_subagent_events_are_nested():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stage,expected", [(2, ["lookup_customer"]),
+                                            (3, ["lookup_customer"]),
+                                            (4, ["lookup_customer", "read_workspace_file"])])
+async def test_reviewer_gets_only_tools_the_parent_has(tmp_state, stage, expected):
+    from harness.persistence import SessionStore
+    from harness.stages import build_agent
+    llm = FakeLLM([[ToolCall("p1", "run_subagent", {"name": "proposal-reviewer", "task": "review"})],
+                   "Supported: all.", "Reviewed."])
+    agent = build_agent(stage, "sales", llm=llm, store=SessionStore() if stage == 4 else None)
+    events = await collect(agent, "review the draft")
+    assert not any(e.kind == "error" for e in events)
+    assert [t.name for t in llm.calls[1]["tools"]] == expected  # the child's first model call
+
+
+@pytest.mark.asyncio
 async def test_compaction_inside_run(tmp_state):
     # Turn 3 crosses the threshold: the summary call comes before the model's answer "a3".
     llm = FakeLLM(["a1", "a2", "- summary of q1 and q2", "a3"], prompt_tokens=10_000)

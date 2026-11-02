@@ -20,25 +20,36 @@ from datetime import datetime, timezone
 from .mock_data import HARNESS_STAGES, SCENARIOS, SNIPPETS
 
 ROLES = ["sales", "engineering", "finance"]
-ROLE_TOOLS = {"sales": {"lookup_customer", "send_proposal"},
-              "engineering": {"lookup_customer", "lookup_issue"},
-              "finance": {"lookup_customer", "get_revenue"}}
+ROLE_TOOLS = {"sales": {"list_customers", "lookup_customer", "send_proposal"},
+              "engineering": {"list_customers", "lookup_customer", "lookup_issue"},
+              "finance": {"list_customers", "lookup_customer", "get_revenue"}}
 TOOL_COMPONENT = {"load_skill": "context", "write_workspace_file": "persistence",
                   "read_workspace_file": "persistence", "list_workspace_files": "persistence"}
+KEEP_LAST = 6  # KESTREL_KEEP_LAST_MESSAGES default
 
 
-def _prompt(stage: int, title: str) -> str:
-    return next(s["prompt"] for s in SCENARIOS[stage] if s["title"] == title)
+def _prompt(stage: int, title: str, default: str) -> str:
+    """The scenario prompt as the harness wrote it (falls back to SPEC.md's wording)."""
+    return next((s["prompt"] for s in SCENARIOS.get(stage, []) if s["title"] == title), default)
 
 
-P_KNOW = _prompt(0, "Does it know us?")
-P_SKILL = _prompt(1, "Skill-guided draft")
-P_LOOKUP = _prompt(2, "Look it up yourself")
-P_RUNAWAY = _prompt(2, "Runaway loop")
-P_REVENUE = _prompt(3, "Wrong role")
-P_SEND = _prompt(3, "Needs a human")
-P_SAVE = _prompt(4, "Save it")
-P_RESUME = _prompt(4, "Come back tomorrow")
+P_WHO = _prompt(0, "Who's Acme?", "Who is Acme Robotics and when is their renewal due?")
+P_PRICE = _prompt(0, "Price the renewal",
+                  "Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing.")
+P_DISCOUNT = _prompt(1, "Can I discount?", "Can I offer Acme 15% off to close this quarter?")
+P_PREPARE = _prompt(2, "Prepare the renewal",
+                    "Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the "
+                    "proposal-reviewer check it before you show it to me.")
+P_HEALTH = _prompt(2, "Account health, every customer",
+                   "Give me an account health report for every customer: their record plus their open issues.")
+P_REVENUE = _prompt(3, "Wrong role", "What was our revenue in FY2026?")
+P_SEND = _prompt(3, "Send it",
+                 "Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs) and send "
+                 'it to procurement@acme-robotics.example with the subject "Kestrel renewal proposal".')
+P_SAVE = _prompt(4, "Save the draft",
+                 "Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs), save it "
+                 "as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the Acme draft is done.")
+P_RESUME = _prompt(4, "Pick up yesterday's work", "Where did we leave off with Acme, and what did we save?")
 
 # Synthetic records, matching company/data/*.json so rehearsal answers look like live ones.
 ACME = {"id": "cust_acme", "name": "Acme Robotics", "industry": "Industrial automation", "plan": "Growth",
@@ -47,21 +58,34 @@ ACME = {"id": "cust_acme", "name": "Acme Robotics", "industry": "Industrial auto
         "notes": "Evaluating an upgrade to the Enterprise plan for 40 seats. Security review requires SAML SSO "
                  "and exportable audit logs. Asked about a multi-year discount (not approved). Procurement is "
                  "the contact for all proposals."}
+CUSTOMERS = [("cust_acme", "Acme Robotics", "Growth"), ("cust_northwind", "Northwind Freight", "Enterprise"),
+             ("cust_blueharbor", "Blue Harbor Health", "Enterprise"), ("cust_lumen", "Lumen Grove Education", "Starter"),
+             ("cust_ironbark", "Ironbark Mining Co", "Growth"), ("cust_pinecrest", "Pinecrest Credit Union", "Growth"),
+             ("cust_tidewater", "Tidewater Studios", "Starter")]
+ACME_ISSUES = [{"id": "ISS-1043", "customer_id": "cust_acme", "title": "Audit log export missing actor IP",
+                "severity": "S2", "status": "open"},
+               {"id": "ISS-1044", "customer_id": "cust_acme", "title": "Robot fleet dashboard slow to load",
+                "severity": "S3", "status": "resolved"}]
 SKILL_BODY = ("# Proposal writing (company-wide)\n\nRequired sections: Summary, Their goals, Proposed plan, "
-              "Security & compliance, Timeline, Next steps.\nTone: plain, specific, no superlatives.\n"
-              "Never promise: roadmap dates, custom SLAs, discounts finance has not approved.")
-PROPOSAL = ("## Summary\nKestrel **Enterprise** for Acme Robotics (cust_acme): an upgrade from Growth to 40 seats "
-            "with SAML SSO and exportable audit logs.\n\n## Their goals\n- Pass the security review (SAML SSO, audit export)\n"
-            "- Grow from 25 to 40 seats\n\n## Proposed plan\n40 seats × $150/seat/month × 12 = **$72,000/yr**.\n\n"
-            "## Security & compliance\nSAML SSO, audit log export, SOC 2 Type II report under NDA.\n\n"
-            "## Next steps\nSecurity review call with procurement, then an order form before the 2027-03-31 renewal.")
-REVIEW = ("**Supported**\n- Upgrade to Enterprise, 40 seats: the record (cust_acme) notes the evaluation\n"
+              "What is included, Open items, Next steps.\nTone: plain and specific, no superlatives.\n"
+              "Never promise: discounts finance has not approved, roadmap dates, fixes by a date.")
+PROPOSAL = ("## Summary\nUpgrade Acme Robotics (cust_acme) from Growth to **Enterprise** at 40 seats, which covers "
+            "the SAML SSO and audit log export their security review requires.\n\n## Their goals\n"
+            "- Pass the security review (SAML SSO, exportable audit logs)\n- Grow from 25 to 40 seats\n\n"
+            "## Proposed plan\nEnterprise, 40 seats × $2,400 per seat per year = **$96,000 per year**.\n\n"
+            "## What is included\nSAML SSO, audit log export, US/EU data residency, 99.9% SLA, a named CSM.\n\n"
+            "## Open items\n- ISS-1043 (S2, open): audit log export is missing the actor IP\n"
+            "- The multi-year discount they asked about is not approved\n\n"
+            "## Next steps\nProcurement (procurement@acme-robotics.example) reviews before the 2027-03-31 renewal.\n\n"
+            "Prepared by Kestrel Desk for review.")
+REVIEW = ("**Supported**\n- Enterprise, 40 seats: the record (cust_acme) notes the evaluation\n"
           "- SAML SSO and audit export: required by their security review\n\n"
           "**Unsupported**\n- \"Multi-year discount\": the record says it was not approved\n\n"
-          "**Missing**\n- Renewal date 2027-03-31\n- Contact: procurement@acme-robotics.example")
-SUMMARY = ("[Conversation summary]\n- Drafted a Kestrel Enterprise proposal for Acme Robotics (cust_acme): 40 seats, "
-           "SAML SSO, audit log export, $72,000/yr\n- proposal-reviewer removed an unapproved multi-year discount\n"
-           "- Saved as workspace/acme-proposal.md\n- Open item: send to procurement once approved")
+          "**Missing**\n- ISS-1043 (S2, open) should be named under Open items")
+SUMMARY = ("[Conversation summary]\n- Drafted a Kestrel Enterprise renewal proposal for Acme Robotics (cust_acme): "
+           "40 seats × $2,400 = $96,000/yr, SAML SSO, audit log export\n- Saved it as workspace/acme-renewal.md\n"
+           "- The edit to company/AGENTS.md was refused: only workspace/ is writable\n"
+           "- Open items: ISS-1043 (S2), send to procurement once approved")
 REVENUE = {"FY2026-Q1": 7889000, "FY2026-Q2": 8175000, "FY2026-Q3": 8473000, "FY2026-Q4": 8783000}
 
 
@@ -107,11 +131,16 @@ async def _pause(lo: float, hi: float | None = None) -> None:
 
 
 class _Run:
-    """Helpers that emit the real loop's event sequences for one scripted run."""
+    """Helpers that emit the real loop's event sequences for one scripted run, and keep the history
+    shaped like the real one (assistant message with tool_calls, then one tool message per call)."""
     def __init__(self, agent: "MockAgent", queue: asyncio.Queue, sub: str | None = None) -> None:
         self.a, self.q, self.sub = agent, queue, sub
         self.model_calls = self.tool_calls = self.prompt_tokens = self.completion_tokens = 0
-        self._n = 0
+        self.last: dict | None = None  # the assistant message tool calls attach to
+
+    def _append(self, msg: dict) -> None:
+        if not self.sub:  # a subagent has its own message list
+            self.a.messages.append(msg)
 
     async def emit(self, kind, data=None, component=None, sub=None):
         await self.q.put(MockEvent(kind, data or {}, component, sub or self.sub))
@@ -128,13 +157,19 @@ class _Run:
         self.completion_tokens += ct
         model = "claude-haiku-5-5" if self.sub else "claude-sonnet-5-5"
         await self.emit("usage", {"model": model, "prompt_tokens": pt, "completion_tokens": ct}, "model")
+        self.last = {"role": "assistant", "content": text}
+        self._append(self.last)
         await self.checkpoint()
         return text
 
     async def call(self, name, args, gap=(0.35, 0.6)) -> str:
-        self._n += 1
         self.tool_calls += 1
         cid = f"call_{uuid.uuid4().hex[:6]}"
+        if self.last is None:
+            self.last = {"role": "assistant", "content": ""}
+            self._append(self.last)
+        self.last.setdefault("tool_calls", []).append(
+            {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}})
         await self.emit("tool_call", {"id": cid, "name": name, "arguments": args}, TOOL_COMPONENT.get(name, "actions"))
         await _pause(*gap)
         return cid
@@ -162,6 +197,7 @@ class _Run:
                     "role": self.a.role, "tool": name, "args": json.dumps(args)[:300], "ok": ok, "decision": outcome}
             self.a.backend.audit_lines.append(line)
             await self.emit("audit", line, "boundaries")
+        self._append({"role": "tool", "tool_call_id": cid, "content": result})
         await self.checkpoint()
 
     async def ask(self, name, args) -> tuple[str, bool]:
@@ -175,41 +211,59 @@ class _Run:
         await self.emit("approval_result", {"request_id": rid, "tool": name, "approved": approved}, "boundaries")
         return cid, approved
 
-    async def todos(self, *statuses):
-        texts = ["Look up Acme Robotics", "Load the proposal-writing skill", "Draft the proposal",
-                 "Get a proposal-reviewer check"]
-        await self.emit("todo_update", {"items": [{"text": t, "status": s} for t, s in zip(texts, statuses)]}, "actions")
-
     async def checkpoint(self):
         if self.a.stage >= 4 and not self.sub:
             await self.emit("checkpoint", {"session_id": self.a.session_id, "messages": len(self.a.messages)},
                             "persistence")
 
 
-# ---------------------------------------------------------------- scripts (one per scenario)
-async def s_know(r: _Run, text: str) -> str:
+# ---------------------------------------------------------------- scripts (one per scenario prompt)
+async def s_who(r: _Run, text: str) -> str:
+    if r.a.stage >= 2:
+        await r.model()
+        await r.tool("lookup_customer", {"name": "Acme Robotics"}, json.dumps(ACME, indent=2))
+        return await r.model("**Acme Robotics** (cust_acme) is an industrial automation customer on Growth with 25 seats "
+                             "($54,000 ARR). Their renewal is due **2027-03-31**; they're evaluating Enterprise at 40 seats.")
+    if r.a.stage == 1:
+        return await r.model("Our company instructions cover Kestrel's plans, prices and rules, but not individual "
+                             "customer records. I can't tell you who Acme Robotics is or when they renew without a "
+                             "lookup tool or you telling me.")
+    return await r.model("I don't have any information about a company called Acme Robotics or its contracts. I'm not "
+                         "connected to your CRM or any internal records, so I can't tell you when their renewal is due.\n\n"
+                         "If you share their account details, I can help you plan the renewal.")
+
+
+async def s_price(r: _Run, text: str) -> str:
     if r.a.stage == 0:
         return await r.model(
-            "I don't have specific information about Kestrel Software or your internal proposal process. I'm not "
-            "connected to your company's documents or systems, so anything specific would be a guess.\n\n"
-            "Typical B2B SaaS proposal processes look like this:\n\n- **Discovery**: understand needs and constraints\n"
-            "- **Drafting**: scope, pricing, timeline, terms\n- **Review**: legal, finance and leadership sign-off\n"
-            "- **Delivery**: send, follow up, negotiate\n\nShare your team's guidelines and I'll follow them.")
-    await r.model("From our company instructions: Kestrel Software sells B2B SaaS; the teams are sales, engineering and finance.")
-    await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
-    return await r.model("\n\nOur proposal process (proposal-writing skill):\n\n- Required sections: Summary, Their goals, "
-                         "Proposed plan, Security & compliance, Timeline, Next steps\n- Plain, specific tone\n"
-                         "- Never promise roadmap dates, custom SLAs, or discounts finance has not approved")
+            "# Renewal proposal: Acme Robotics\n\n**Plan:** Enterprise, 40 seats\n\n**Pricing:** Enterprise plans "
+            "typically run **$50–$100 per seat per month**. At $75/seat/month, 40 seats comes to **$36,000 per year**. "
+            "_(Please confirm your actual list price; I don't know your pricing.)_\n\n**Why renew:** continued support, "
+            "new features, priority onboarding.\n\nI can add a 15% multi-year discount to make it more compelling.")
+    if r.a.stage >= 2:
+        await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
+        await r.tool("lookup_customer", {"name": "Acme Robotics"}, json.dumps(ACME, indent=2))
+        return await r.model("# Proposal: Acme Robotics — Enterprise\n\n" + PROPOSAL)
+    return await r.model(
+        "# Proposal: Acme Robotics — Enterprise\n\n## Summary\nMove Acme Robotics to Kestrel **Enterprise** for 40 seats.\n\n"
+        "## Proposed plan\nEnterprise, 40 seats × $2,400 per seat per year = **$96,000 per year** (25-seat minimum met).\n\n"
+        "## What is included\nSAML SSO, audit log export, US/EU data residency, 99.9% SLA, a named CSM.\n\n"
+        "## Open items\nNo discount is included: anything above 10% needs written approval from finance.\n\n"
+        "## Next steps\nConfirm Acme's current plan, contact and renewal date; I have no customer record to check them.\n\n"
+        "Prepared by Kestrel Desk for review.")
 
 
-async def s_skill(r: _Run, text: str) -> str:
-    await r.model("I'll load the proposal-writing skill first so the draft follows our house format.")
-    await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
-    return await r.model("\n\n# Proposal: Acme Robotics\n\n" + PROPOSAL +
-                         "\n\n_Note: I have no customer record for Acme, so plan and seats are as you described._")
+async def s_discount(r: _Run, text: str) -> str:
+    if r.a.stage == 0:
+        return await r.model("15% to close this quarter is a common lever. If the deal is strategic and the customer is "
+                             "ready to sign, it's usually reasonable; just make it time-bound and tie it to a signed "
+                             "order by quarter end.")
+    return await r.model("**No, not on your own.** Our rule is that discounts above 10% need written approval from "
+                         "finance, and we never offer one without it.\n\nIf you want to pursue 15%, get finance's written "
+                         "approval first; until then, the proposal stays at list price.")
 
 
-async def subagent_review(r: _Run, task: str) -> str:
+async def subagent_review(r: _Run, task: str, read_path: str = "", body: str = "") -> str:
     sub = "proposal-reviewer"
     cid = await r.call("run_subagent", {"name": sub, "task": task})
     await r.emit("decision", {"id": cid, "tool": "run_subagent", "action": "allow", "reason": "", "silent": True}, "actions")
@@ -218,7 +272,9 @@ async def subagent_review(r: _Run, task: str) -> str:
     await child.emit("run_start", {"session_id": f"{r.a.session_id}:{sub}", "stage": r.a.stage, "role": r.a.role,
                                    "text": task})
     await child.model("Checking the draft against the record.")
-    await child.tool("lookup_customer", {"name": "Acme Robotics"}, json.dumps(ACME, indent=2))
+    if read_path:  # stage 4: the reviewer reads the saved draft itself
+        await child.tool("read_workspace_file", {"path": read_path}, body)
+    await child.tool("lookup_customer", {"name": "cust_acme"}, json.dumps(ACME, indent=2))
     await child.model("\n\n" + REVIEW)
     await child.emit("text_done", {"text": REVIEW}, "model")
     await child.emit("run_end", {"session_id": f"{r.a.session_id}:{sub}", "model_calls": child.model_calls,
@@ -229,48 +285,37 @@ async def subagent_review(r: _Run, task: str) -> str:
     return REVIEW
 
 
-async def s_lookup(r: _Run, text: str) -> str:
-    await r.model("Plan first, then the record.")
-    items = [{"text": t, "status": "pending"} for t in ["Look up Acme Robotics", "Load the proposal-writing skill",
-                                                         "Draft the proposal", "Get a proposal-reviewer check"]]
-    await r.tool("update_todos", {"items": items}, "ok (4 items)")
-    await r.todos("in_progress", "pending", "pending", "pending")
+async def s_prepare(r: _Run, text: str) -> str:
+    await r.model("I'll pull our proposal playbook, then Acme's record and open issues.")
+    await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
     await r.model()
-    await r.tool("lookup_customer", {"name": "Acme Robotics"}, json.dumps(ACME, indent=2))
-    await r.todos("done", "in_progress", "pending", "pending")
-    if r.a.stage >= 1:
-        await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
-    await r.todos("done", "done", "in_progress", "pending")
-    await r.model("Draft ready: Enterprise, 40 seats, SSO, audit export, and a multi-year discount. "
-                  "Sending it to proposal-reviewer before I show you.")
-    await r.todos("done", "done", "done", "in_progress")
-    await subagent_review(r, "Review this Acme Robotics draft against the customer record and flag unsupported commitments.")
-    await r.todos("done", "done", "done", "done")
-    return await r.model("\n\nThe reviewer caught one unsupported commitment, so I fixed it before showing you.\n\n"
-                         "# Proposal: Acme Robotics\n\n" + PROPOSAL +
-                         "\n\n**Review notes applied:** removed the multi-year discount (not approved); renewal date added.")
+    await r.tool("lookup_customer", {"name": "cust_acme"}, json.dumps(ACME, indent=2))
+    await r.tool("lookup_issue", {"query": "cust_acme"}, json.dumps(ACME_ISSUES, indent=2))
+    await r.model("Draft ready. Sending it to proposal-reviewer before I show you.")
+    await subagent_review(r, "Review this Acme Robotics renewal draft against the customer record and flag "
+                             "unsupported commitments.")
+    return await r.model("\n\nThe reviewer flagged an unapproved multi-year discount, so it stays out.\n\n"
+                         "# Proposal: Acme Robotics — Enterprise\n\n" + PROPOSAL)
 
 
-async def s_runaway(r: _Run, text: str) -> str:
-    await r.model("Starting with the open issues.")
-    await r.tool("lookup_issue", {"query": "open"},
-                 '[{"id": "ISS-1041", "customer_id": "cust_northwind"}, {"id": "ISS-1043", "customer_id": "cust_acme"}, ...]')
-    customers = ["Northwind Freight", "Acme Robotics", "Blue Harbor Health", "Pinecrest Credit Union", "Tidewater Studios"]
-    for i in range(9):  # CallLimit default: 10 tool calls per run, so the 11th is denied
+async def s_health(r: _Run, text: str) -> str:
+    await r.model("I'll list every customer, then pull each record and its open issues.")
+    await r.tool("list_customers", {}, "\n".join(f"{c}: {n} ({p})" for c, n, p in CUSTOMERS))
+    for i in range(10):  # CallLimit: 10 tool calls per run; list_customers was the 1st, so the 11th is denied
+        cid, name, _ = CUSTOMERS[i // 2]
         if i % 2 == 0:
             await r.model(think=(0.12, 0.22))
-            c = customers[(i // 2) % len(customers)]
-            await r.tool("lookup_customer", {"name": c}, json.dumps({"name": c}), gap=(0.25, 0.35))
+            await r.tool("lookup_customer", {"name": cid}, json.dumps({"id": cid, "name": name}), gap=(0.2, 0.3))
+        elif i < 9:
+            await r.tool("lookup_issue", {"query": cid}, f'[{{"customer_id": "{cid}", "status": "open"}}]', gap=(0.2, 0.3))
         else:
-            await r.tool("lookup_issue", {"query": customers[(i // 2) % len(customers)]},
-                         f'[{{"id": "ISS-10{41 + i % 10}", "status": "open"}}]', gap=(0.25, 0.35))
-    await r.model(think=(0.2, 0.3))
-    await r.tool("lookup_customer", {"name": "Acme Robotics"}, deny_component="actions",
-                 deny="Tool call limit reached (10 per run). Stop calling tools and answer with what you have.")
-    return await r.model("The harness stopped me at its 10 tool-call limit, which is the right call: this request "
-                         "never terminates on its own. What I covered:\n\n- 5 of 7 open issues, across 5 customers\n"
-                         "- Northwind Freight has an open **S1** (ISS-1041)\n\nWant a bounded version, such as one pass "
-                         "over S1–S2 issues only?")
+            await r.tool("lookup_issue", {"query": cid}, deny_component="actions",
+                         deny="Tool call limit reached (10 per run). Stop calling tools and answer with what you have.")
+    return await r.model("The harness stopped me at its limit of 10 tool calls per run, so this report is partial.\n\n"
+                         "| Customer | Plan | Open issues |\n|---|---|---|\n| Acme Robotics | Growth | ISS-1043 (S2) |\n"
+                         "| Northwind Freight | Enterprise | **ISS-1041 (S1)** |\n| Blue Harbor Health | Enterprise | ISS-1046 (S4) |\n"
+                         "| Lumen Grove Education | Starter | ISS-1049 (S4) |\n| Ironbark Mining Co | Growth | not checked |\n\n"
+                         "Not covered: Ironbark's issues, Pinecrest Credit Union, Tidewater Studios. Ask for those and I'll finish.")
 
 
 async def s_revenue(r: _Run, text: str) -> str:
@@ -290,16 +335,29 @@ async def s_revenue(r: _Run, text: str) -> str:
                          "Steady growth of about 3.6% quarter over quarter. Source: synthetic FP&A export.")
 
 
-async def _send(r: _Run, to: str) -> str:
-    args = {"customer_id": "cust_acme", "to_email": to, "subject": "Kestrel Enterprise proposal",
-            "body_markdown": "# Kestrel Enterprise proposal\n\n" + PROPOSAL}
+async def _draft(r: _Run) -> None:
+    await r.model("I'll check Acme's record and our proposal format, then draft.")
+    await r.tool("lookup_customer", {"name": "Acme Robotics"}, json.dumps(ACME, indent=2))
+    await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
+
+
+async def s_send(r: _Run, text: str) -> str:
+    if r.a.stage < 2:
+        return await r.model("I can't send email: I have no tools at this stage. Here's a draft you could send yourself.")
+    await _draft(r)
+    to = (re.search(r"[\w.+-]+@[\w.-]+\w", text) or [ACME["contact_email"]])[0]
+    m = re.search(r'subject\s+"([^"]+)"', text)
+    args = {"customer_id": "cust_acme", "to_email": to, "subject": m.group(1) if m else "Kestrel renewal proposal",
+            "body_markdown": "# Proposal: Acme Robotics — Enterprise\n\n" + PROPOSAL}
     if r.a.stage >= 3 and "send_proposal" not in ROLE_TOOLS.get(r.a.role, set()):
+        await r.model()
         await r.tool("send_proposal", args, deny=f"Role '{r.a.role}' is not allowed to use send_proposal. Allowed: "
                      + ", ".join(sorted(ROLE_TOOLS[r.a.role])) + ".")
         return await r.model("Your role can't send proposals; the harness blocked it. Ask someone in sales.")
+    await r.model(f"Drafted the renewal: Enterprise, 40 seats, $96,000/yr. Sending it to {to}"
+                  + ("; this one needs your approval." if r.a.stage >= 3 else "."))
     if r.a.stage < 3:  # no ApprovalGate yet: it just runs
-        cid = await r.call("send_proposal", args)
-        approved = True
+        cid, approved = await r.call("send_proposal", args), True
     else:
         cid, approved = await r.ask("send_proposal", args)
     if not approved:
@@ -311,62 +369,50 @@ async def _send(r: _Run, to: str) -> str:
         await r.result(cid, "send_proposal", f"Tool error: Unverified address: {to} is not the contact on record "
                        f"({ACME['contact_email']}).", False, args, outcome)
         return await r.model(f"You approved it, but the tool itself refused: **{to}** isn't Acme's contact on record. "
-                             f"Proposals go to **{ACME['contact_email']}**. Two layers, two checks.\n\n"
-                             "Want me to send it there instead?")
+                             f"Proposals go to **{ACME['contact_email']}**. Two layers, two checks.")
     name = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}_cust_acme.md"
     path = f".harness_state/outbox/{name}"
     r.a.backend.outbox_files.insert(0, {"name": name, "path": path, "size": 1284, "modified": time.time(),
-                                        "preview": f"To: {to}\nSubject: Kestrel Enterprise proposal"})
+                                        "preview": f"To: {to}\nSubject: {args['subject']}"})
     await r.result(cid, "send_proposal", f"Queued to outbox: {path}", True, args, outcome)
-    return await r.model(f"Done: queued to the outbox at `{path}`. Nothing leaves the building; the outbox is a folder.\n\n"
-                         "_Variant: ask for the same send to ceo@acme-robotics.example and the tool itself rejects the "
-                         "unverified address, even after you approve._")
-
-
-async def _draft(r: _Run) -> None:
-    """First half of the self-contained stage 3/4 prompts: look up Acme, load the skill, draft."""
-    await r.model("I'll check Acme's record and our proposal format, then draft.")
-    await r.tool("lookup_customer", {"name": "Acme Robotics"}, json.dumps(ACME, indent=2))
-    await r.tool("load_skill", {"name": "proposal-writing"}, SKILL_BODY)
-    await r.model("Drafted a short Enterprise proposal for Acme Robotics (cust_acme): 40 seats, SAML SSO, "
-                  "audit export, $72,000/yr.")
-
-
-async def s_send(r: _Run, text: str) -> str:
-    if r.a.stage < 2:
-        return await r.model("I can't send email: I have no tools at this stage. Here's a draft you could send yourself.")
-    await _draft(r)
-    m = re.search(r"[\w.+-]+@[\w.-]+\w", text)
-    to = m.group(0) if m else ACME["contact_email"]
-    await r.model(f" Sending it to {to}" + ("; this one needs your approval." if r.a.stage >= 3 else "."))
-    return await _send(r, to)
+    return await r.model(f"Done: queued to the outbox at `{path}`. Nothing leaves the building; the outbox is a folder.")
 
 
 async def s_save(r: _Run, text: str) -> str:
-    if "draft" in text.lower():
-        await _draft(r)
-    await r.model(" Saving it to the workspace.")
-    await r.tool("write_workspace_file", {"path": "acme-proposal.md", "content": "# Proposal: Acme Robotics\n\n" + PROPOSAL},
-                 "Saved 1284 characters to workspace/acme-proposal.md")
-    return await r.model("Saved: **workspace/acme-proposal.md**. This conversation is checkpointed too, so we can pick it up tomorrow.")
+    # History stays 7 messages (user, write, result, write + reviewer, 2 results, answer), so with
+    # Pick up yesterday's work the session is 9 messages and Long day compacts it to 7.
+    await r.model("Drafted from what you gave me. Saving it first.")
+    body = "# Proposal: Acme Robotics — Enterprise\n\n" + PROPOSAL
+    await r.tool("write_workspace_file", {"path": "acme-renewal.md", "content": body},
+                 f"Saved {len(body)} characters to workspace/acme-renewal.md")
+    await r.model("Now the AGENTS.md note, and a reviewer check of the saved file.")
+    await r.tool("write_workspace_file", {"path": "company/AGENTS.md", "content": "- The Acme renewal draft is done."},
+                 "Tool error: Path 'company/AGENTS.md' is outside workspace/. Only workspace/ is writable.", ok=False)
+    await subagent_review(r, "Review workspace/acme-renewal.md against Acme's customer record.", "acme-renewal.md", body)
+    return await r.model("Saved the draft to **workspace/acme-renewal.md** (Enterprise, 40 seats, $96,000/yr); the "
+                         "proposal-reviewer read it back and flagged only the unapproved multi-year discount, which "
+                         "the draft already leaves out.\n\nI could not add the line to `company/AGENTS.md`: the file "
+                         "tool refuses any path outside `workspace/`. Someone with repo access can add it, or I can "
+                         "save the note under workspace/.")
 
 
 async def s_protected(r: _Run, text: str) -> str:
     await r.model("I'll make that edit.")
-    await r.tool("write_workspace_file", {"path": "../company/AGENTS.md", "content": "# Kestrel Software\n(updated)"},
-                 deny="'../company/AGENTS.md' is under protected path company/.")
-    return await r.model("I can't write there: the harness only allows writes inside `workspace/`, and `company/AGENTS.md` "
-                         "is protected. I can save the proposed change as `workspace/AGENTS-proposed.md` for review.")
+    await r.tool("write_workspace_file", {"path": "company/AGENTS.md", "content": "# Kestrel Software\n(updated)"},
+                 "Tool error: Path 'company/AGENTS.md' is outside workspace/. Only workspace/ is writable.", ok=False)
+    return await r.model("I can't write there: the file tools only write inside `workspace/`. I can save the proposed "
+                         "change as `workspace/AGENTS-proposed.md` for review.")
 
 
 async def s_resume(r: _Run, text: str) -> str:
     if len(r.a.messages) < 3:
-        return await r.model("I don't see an earlier conversation in this session. Resume one from the Sessions list.")
-    await compact(r.a, r.emit)
-    return await r.model("Earlier we saved **workspace/acme-proposal.md**: the Kestrel Enterprise proposal for Acme Robotics.\n\n"
-                         "- 40 seats on Enterprise, SAML SSO, audit log export\n- $72,000/yr\n"
-                         "- Next step: security review call with procurement\n\n"
-                         "I answered from the saved conversation; I didn't need to re-read the file.")
+        return await r.model("I don't see an earlier conversation in this session. Pick one from the Sessions list, "
+                             "or run 'Save the draft' first.")
+    return await r.model("We left off with Acme's renewal draft:\n\n- Saved **workspace/acme-renewal.md**: Enterprise, "
+                         "40 seats × $2,400 = $96,000/yr, SAML SSO and audit log export\n- The note in "
+                         "`company/AGENTS.md` was refused (outside workspace/), so it still needs adding\n"
+                         "- Open: ISS-1043 (S2) and sending it to procurement\n\n"
+                         "I answered from this session's saved history, without re-reading the file.")
 
 
 async def s_generic(r: _Run, text: str) -> str:
@@ -381,9 +427,10 @@ async def s_generic(r: _Run, text: str) -> str:
                          f"{HARNESS_STAGES[r.a.stage]['name'].lower()} components.")
 
 
-# prompt -> (script, first stage whose tools the script needs)
-SCRIPTS = {P_KNOW: (s_know, 0), P_SKILL: (s_skill, 1), P_LOOKUP: (s_lookup, 2), P_RUNAWAY: (s_runaway, 2),
-           P_REVENUE: (s_revenue, 2), P_SEND: (s_send, 0), P_SAVE: (s_save, 4), P_RESUME: (s_resume, 4)}
+# prompt -> script (scripts adapt to the stage they run at)
+SCRIPTS = {P_WHO: s_who, P_PRICE: s_price, P_DISCOUNT: s_discount, P_PREPARE: s_prepare, P_HEALTH: s_health,
+           P_REVENUE: s_revenue, P_SEND: s_send, P_SAVE: s_save, P_RESUME: s_resume}
+MIN_STAGE = {s_prepare: 2, s_health: 2, s_save: 4, s_resume: 4}
 
 
 def _norm(text: str) -> str:
@@ -392,26 +439,26 @@ def _norm(text: str) -> str:
 
 def _pick(stage: int, text: str):
     t = _norm(text)
-    for prompt, (fn, min_stage) in SCRIPTS.items():  # scenario prompts arrive verbatim from the drawer
+    for prompt, fn in SCRIPTS.items():  # scenario prompts arrive verbatim from the drawer: match the whole text
         if _norm(prompt) == t:
-            return fn if stage >= min_stage else s_generic
+            return fn if stage >= MIN_STAGE.get(fn, 0) else s_generic
     if stage >= 4 and "agents.md" in t:  # free-text variants the presenter may type
         return s_protected
     if stage >= 2 and "send" in t and "@" in t:
         return s_send
-    if stage >= 4 and "save" in t:
-        return s_save
     if stage >= 2 and "revenue" in t:
         return s_revenue
     return s_generic
 
 
 async def compact(agent: "MockAgent", emit) -> dict:
-    """The Compactor's visible effect: older turns become one summary message."""
+    """The Compactor's visible effect: older turns become one summary message, the last KEEP_LAST stay."""
     before = len(agent.messages)
-    keep = min(2, len(agent.messages))
-    agent.messages[:] = [{"role": "user", "content": SUMMARY}] + agent.messages[len(agent.messages) - keep:]
-    await emit("compaction", {"before": before, "after": len(agent.messages), "summarized": before - keep,
+    cut = before - KEEP_LAST
+    while 0 < cut < before and agent.messages[cut].get("role") == "tool":  # never orphan a tool result
+        cut -= 1
+    agent.messages[:] = [{"role": "user", "content": SUMMARY}] + agent.messages[cut:]
+    await emit("compaction", {"before": before, "after": len(agent.messages), "summarized": cut,
                               "summary_preview": SUMMARY[len("[Conversation summary]\n"):][:400]}, "persistence")
     if agent.stage >= 4:
         await emit("checkpoint", {"session_id": agent.session_id, "messages": len(agent.messages)}, "persistence")
@@ -424,7 +471,7 @@ class MockAgent:
         self.backend, self.stage, self.role, self.session_id = backend, stage, role, session_id
         self.messages = messages
         self.resumed = bool(messages)
-        self.base_tokens = [40, 1850, 2600, 2900, 3300][stage]
+        self.base_tokens = [40, 1850, 2600, 2900, 3300][min(stage, 4)]
 
     async def run(self, text: str):
         q: asyncio.Queue = asyncio.Queue()
@@ -433,12 +480,11 @@ class MockAgent:
         async def script():
             await r.emit("run_start", {"session_id": self.session_id, "stage": self.stage, "role": self.role, "text": text})
             self.messages.append({"role": "user", "content": text})
+            self.backend.touch(self)
             await r.checkpoint()
             err = None
             try:
-                final = await _pick(self.stage, text)(r, text)
-                self.messages.append({"role": "assistant", "content": final})
-                await r.checkpoint()
+                final = await _pick(self.stage, text)(r, text)  # the last model() call appended the answer
                 await r.emit("text_done", {"text": final}, "model")
             except Exception as exc:  # scripted failures surface exactly like real ones
                 err = str(exc)
@@ -458,7 +504,7 @@ class MockAgent:
 
 
 class MockBackend:
-    """Everything server.py needs, without `harness`."""
+    """Everything server.py needs, without `harness`. Sessions start empty, like a fresh SQLite file."""
     mock = True
 
     def __init__(self) -> None:
@@ -466,13 +512,7 @@ class MockBackend:
         self.roles = list(ROLES)
         self.audit_lines: list[dict] = []
         self.outbox_files: list[dict] = []
-        now = time.time()
-        convo = [P_LOOKUP, "Here's the reviewed Acme proposal ...", "Tighten the pricing section.", "Updated pricing ...",
-                 P_SAVE, "Saved: workspace/acme-proposal.md", "Add the renewal date to next steps.", "Added 2027-03-31."]
-        self.sessions: dict[str, dict] = {"7f3a9c21b0de": {
-            "session_id": "7f3a9c21b0de", "stage": 4, "role": "sales", "title": P_LOOKUP[:60],
-            "created_at": now - 86400, "updated_at": now - 85000,
-            "messages": [{"role": "user" if i % 2 == 0 else "assistant", "content": c} for i, c in enumerate(convo)]}}
+        self.sessions: dict[str, dict] = {}
 
     def meta(self) -> dict:
         return {"model": "claude-sonnet-5-5", "base_url_host": "offline rehearsal", "mock": True,
@@ -491,8 +531,10 @@ class MockBackend:
         rec = self.sessions.get(agent.session_id)
         if rec is not None:
             rec["updated_at"] = time.time()
-            if not rec["title"] and agent.messages:
-                rec["title"] = str(agent.messages[0]["content"])[:60]
+            first = next((m["content"] for m in agent.messages if m.get("role") == "user"
+                          and not str(m.get("content", "")).startswith("[Conversation summary]")), "")
+            if not rec["title"] and first:
+                rec["title"] = str(first)[:60]
 
     def list_sessions(self) -> list[dict]:
         rows = [{k: v for k, v in s.items() if k != "messages"} | {"message_count": len(s["messages"])}
@@ -508,6 +550,8 @@ class MockBackend:
     async def compact(self, agent: MockAgent, put) -> dict:
         async def emit(kind, data=None, component=None, sub=None):
             put(MockEvent(kind, data or {}, component, sub).to_json())
-        if len(agent.messages) < 3:
-            return {"compacted": False, "reason": "Not enough history to compact yet."}
+        if len(agent.messages) <= KEEP_LAST + 2:
+            return {"compacted": False, "reason": f"Not enough history to compact yet ({len(agent.messages)} messages)."}
+        await _pause(0.8, 1.2)  # the real Compactor makes one summarizing model call
+        self.touch(agent)
         return {"compacted": True, **await compact(agent, emit)}

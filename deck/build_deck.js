@@ -29,11 +29,20 @@ function loadStageData() {
   const code = [
     "import json",
     "import inspect",
-    "from harness.stages import stage_snippet, describe_stage",
+    "import ast, textwrap, dataclasses",
+    "from pathlib import Path",
+    "from harness.stages import stage_snippet, describe_stage, scenarios",
     "from harness.middleware import CallLimit",
     "sig = inspect.signature(CallLimit.__init__).parameters",
-    "data = {s: {'snippets': stage_snippet(s), 'info': describe_stage(s)} for s in range(5)}",
+    "data = {s: {'snippets': stage_snippet(s), 'info': describe_stage(s),",
+    "            'scenarios': [dataclasses.asdict(x) if dataclasses.is_dataclass(x) else dict(x._asdict()) for x in scenarios(s)]} for s in range(5)}",
     "data['call_limit'] = {'model': sig['max_model_calls'].default, 'tool': sig['max_tool_calls'].default}",
+    // the inner load_skill function of make_load_skill_tool, verbatim (decorator to last line, dedented)
+    "src = Path('harness/context.py').read_text(encoding='utf-8')",
+    "outer = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == 'make_load_skill_tool')",
+    "inner = next(n for n in ast.walk(outer) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == 'load_skill')",
+    "start = min([d.lineno for d in inner.decorator_list] + [inner.lineno])",
+    "data['load_skill'] = textwrap.dedent('\\n'.join(src.splitlines()[start - 1:inner.end_lineno]))",
     "print(json.dumps(data))",
   ].join("\n");
   const out = execFileSync(fs.existsSync(py) ? py : "python", ["-c", code], { cwd: REPO, encoding: "utf8" });
@@ -336,31 +345,67 @@ function bulletList(slide, items, x, y, w, h, o = {}) {
 }
 
 // ---------------------------------------------------------------- demo slide
-const SCEN = {
-  0: [{ title: "Does it know us?", role: "sales", watch: "It guesses, or admits it doesn't know. Only the Model lights up.",
-    prompt: "What do you know about Kestrel Software and our proposal process?" }],
-  1: [{ title: "Skill-guided draft", role: "sales", watch: "load_skill fires and the draft follows the skill's sections. We still had to explain who Acme is.",
-    prompt: "Use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, 40 seats, they care about SSO and audit logs." }],
-  2: [{ title: "Look it up yourself", role: "sales", watch: "lookup_customer, a todo list, then the reviewer's nested check.",
-    prompt: "Draft a proposal for Acme Robotics and have the proposal-reviewer check it before you show it to me." },
-  { title: "Runaway loop", role: "engineering", watch: "CallLimit stops the run and says why.",
-    prompt: "For every open issue, look up its customer, then look up every other issue for that customer, and keep going until you have checked everything twice." }],
-  3: [{ title: "Wrong role", role: "engineering", watch: "RoleGate denies get_revenue. The model says so, no guessing.", prompt: "What was our revenue in FY2026?" },
-  { title: "Right role", role: "finance", watch: "Same question, allowed, answered with record ids.", prompt: "What was our revenue in FY2026?" },
-  { title: "Needs a human", role: "sales", watch: "An approval card. Approve: an outbox file and an audit line.",
-    prompt: "Send the Acme Robotics proposal to ceo@acme-robotics.example with the subject \"Kestrel Enterprise proposal\"." }],
-  4: [{ title: "Save it", role: "sales", watch: "write_workspace_file and checkpoints tick up. Then try writing company/AGENTS.md.",
-    prompt: "Save the Acme proposal we discussed as workspace/acme-proposal.md and give me the path." },
-  { title: "Come back tomorrow", role: "sales", watch: "Resume the session: it answers from history. Then press Compact now.",
-    prompt: "(resume the previous session) What did we save earlier, and what was in it?" }],
+// Scenarios come from harness.stages.scenarios(s) at build time (the demo drawer's own list).
+// Per scenario the slide shows title, role, the prompt (verbatim, or shortened where `cut` says so:
+// each cut must match the real prompt exactly, else the build fails) and one "watch" line made of
+// exact excerpts of the real `watch` text (joined with " … " when there are two).
+const DEMO_PICK = {
+  "Who's Acme?": { watch: ["It can't know. Nothing is around the model."] },
+  "Price the renewal": { watch: ["It invents a price, or asks for one. It has no idea what our plans cost."] },
+  "Price the renewal, again": { watch: ["Plan-table price ($2,400 per seat per year), our tone, our sections, no discount. Tokens in jumped: AGENTS.md rides on every call."] },
+  "Can I discount?": { watch: ["\"No: above 10% needs written approval from finance\", straight from AGENTS.md. A business rule, not a fact."] },
+  "Prepare the renewal": { watch: ["load_skill pulls the playbook, lookup_customer and lookup_issue pull the facts, the reviewer runs as a nested subagent."] },
+  "Account health, every customer": { watch: ["CallLimit denies the 11th tool call; the model reports partial results and says why."] },
+  "Wrong role": { watch: ["RoleGate denies get_revenue, in code, before it runs"] },
+  "Right role": { watch: ["Same question, allowed, answered with record ids."] },
+  "Send it": { cut: [" (40 seats, Enterprise, SSO and audit logs)", " (…)"], watch: ["The approval card appears and the loop waits. Approve → outbox file + audit line."] },
+  "Save the draft": {
+    cut: [" (40 seats, Enterprise, SSO and audit logs), save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the Acme draft is done.",
+      " (…), save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md …"], br: "save it as",
+    watch: ["write_workspace_file writes the draft and checkpoints tick up", "the AGENTS.md write is refused by the tool (outside workspace/)"],
+  },
+  "Pick up yesterday's work": { watch: ["Run resumes the most recent saved session from SQLite (the divider says so) and answers from history. In the sidebar the session is highlighted."] },
+  "Long day": { watch: ["9 → 7 messages, a compaction row with the summary."] },
 };
+function demoScenarios(stage) {
+  return DATA[stage].scenarios.map((sc) => {
+    const pick = DEMO_PICK[sc.title];
+    if (!pick) throw new Error(`stage ${stage}: scenario "${sc.title}" has no DEMO_PICK entry`);
+    let prompt = sc.prompt;
+    if (pick.cut) {
+      if (!prompt.includes(pick.cut[0])) throw new Error(`"${sc.title}": cut text not in the real prompt`);
+      prompt = prompt.replace(pick.cut[0], pick.cut[1]);
+    }
+    for (const w of pick.watch) if (!sc.watch.includes(w)) throw new Error(`"${sc.title}": watch excerpt not in the real watch text: ${w}`);
+    if (pick.br && !prompt.includes(" " + pick.br)) throw new Error(`"${sc.title}": line-break anchor not in the prompt`);
+    // br: a visual line break before that phrase (the space there becomes the break; no text changes)
+    const parts = pick.br ? [prompt.slice(0, prompt.indexOf(" " + pick.br)), prompt.slice(prompt.indexOf(" " + pick.br) + 1)] : [prompt];
+    return { ...sc, shown: prompt, parts, notice: pick.watch.join(" … ") };
+  });
+}
 const STAGE_NAME = ["Chatbot", "Context", "Actions", "Boundaries", "Persistence"];
 const kickerFor = (s) => s === 0 ? "Stage 0 of 4 · the model alone" : `Stage ${s} of 4 · ${STAGE_NAME[s]}`;
+// compact component strip, as in the demo's chat screen (one row of pills)
+function compStrip(slide, y, stage) {
+  T(slide, "AROUND THE MODEL", M, y, 3.3, 0.4, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted, valign: "middle" });
+  const items = COMPS.map((c) => ({ ...c, on: c.n <= stage }));
+  items.splice(2, 0, { name: "Model", model: true });
+  const x0 = M + 3.55, gap = 0.12, pw = (W - M - x0 - gap * 4) / 5;
+  items.forEach((c, i) => {
+    const x = x0 + i * (pw + gap);
+    const fill = c.model ? P.forest : c.on ? P.blue : P.gray;
+    const txt = c.model ? "Model" : `${c.n} · ${c.name}${c.on ? "  ✓" : ""}`;
+    pill(slide, txt, x, y, pw, 0.4, { fill, color: c.model ? P.lime : c.on ? P.white : P.muted, size: 13, line: c.on || c.model ? undefined : P.line });
+  });
+}
+const estLines = (text, pt, w, em = 0.45) => Math.max(1, Math.ceil((text.length * (pt * em / 72)) / (w * 0.98)));
 function demoSlide(stage, section, notes) {
-  const list = SCEN[stage];
+  const list = demoScenarios(stage);
   const s = newSlide("K_CONTENT", section, {
-    title: `→ Demo: Stage ${stage} · ${STAGE_NAME[stage]}`, demo: `Switch to the browser: Stage ${stage} (${STAGE_NAME[stage]})`,
-    points: list.map((x) => `${x.title} (${x.role}): ${x.watch}`), notes,
+    title: `→ Demo: Stage ${stage} · ${STAGE_NAME[stage]}`,
+    demo: `Switch to the browser: Stage ${stage} (${STAGE_NAME[stage]})${stage === 4 ? "; the Sessions sidebar appears left of the chat" : ""}`,
+    points: list.map((x) => `${x.title} (as ${x.role}${x.resume ? ", resumes the latest saved session" : ""}): ${x.prompt ? `"${x.shown}"` : "no prompt, press Compact now"}. Watch: ${x.notice}`),
+    notes,
   });
   kicker(s, `Live demo · ${kickerFor(stage)}`);
   title(s, `Demo: Stage ${stage} · ${STAGE_NAME[stage]}`, "→ ");
@@ -368,26 +413,50 @@ function demoSlide(stage, section, notes) {
     { text: "Browser → Stage " + stage + ". Open " },
     { text: "Code & scenarios", options: { bold: true, color: P.forest } },
     { text: " ( / ) and run:" },
-  ], M, 1.72, CW, 0.4, { fontSize: 20, color: P.ink });
-  const n = list.length, gap = 0.3, cw = n === 1 ? 7.6 : (CW - gap * (n - 1)) / n, ch = 2.9, y = 2.32;
-  list.forEach((sc, i) => {
-    const x = M + i * (cw + gap);
-    card(s, x, y, cw, ch, { name: `scenario ${sc.title}` });
-    dot(s, String(i + 1), x + 0.3, y + 0.3, 0.46, { size: 16 });
-    T(s, sc.title, x + 0.92, y + 0.27, cw - 1.1, 0.52, { fontFace: HEAD, fontSize: 24, bold: true, color: P.forest, valign: "middle" });
-    pill(s, "AS " + sc.role.toUpperCase(), x + 0.3, y + 0.98, 0.32 + 0.105 * (sc.role.length + 3), 0.32, { size: 11, cs: 1.5 });
-    T(s, "WATCH", x + 0.3, y + 1.48, 2, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
-    T(s, sc.watch, x + 0.3, y + 1.72, cw - 0.6, ch - 1.82, { fontSize: 20, color: P.ink });
-  });
-  if (n === 1) {
-    // single scenario: show where it sits in the strip, as in the demo's chat screen
-    T(s, "WHAT TO NOTICE", M + 7.9, y + 0.05, 4.2, 0.25, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
-    T(s, stage === 0
-      ? "Nothing is around the model yet. Every component card in the strip is gray."
-      : "Watch the Context card pulse each time load_skill runs.", M + 7.9, y + 0.4, 4.2, 2.2, { fontSize: 20, color: P.ink });
+  ], M, 1.7, 8, 0.4, { fontSize: 20, color: P.ink, valign: "middle" });
+  if (stage === 4) {
+    s.addShape(S.ROUNDED_RECTANGLE, { x: W - M - 4.3, y: 1.7, w: 4.3, h: 0.4, rectRadius: 0.2, fill: { color: P.ring }, line: { color: P.orange, width: 1.25 }, objectName: "new sidebar pill" });
+    T(s, [{ text: "NEW  ", options: { bold: true, color: P.orangeText, charSpacing: 2, fontSize: 11 } }, { text: "Sessions sidebar, left of the chat", options: { color: P.markText } }],
+      W - M - 4.3, 1.7, 4.3, 0.4, { fontSize: 15, align: "center", valign: "middle" });
   }
-  T(s, "AROUND THE MODEL · AFTER THIS STAGE", M, 5.53, 8, 0.24, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
-  compRow(s, { y: 5.84, h: 1.05, stage, now: false });
+  const n = list.length, big = n <= 2;
+  const pPt = big ? 18 : 16, wPt = big ? 16 : 14, tPt = big ? 20 : 18;
+  const lw = 3.3, rOff = 3.55, rw = CW - rOff - 0.3;
+  const lh = (pt) => pt * 1.2 / 72, WL = 0.9;
+  const rows = list.map((sc) => {
+    const tLines = estLines(sc.title, tPt, lw - 0.85, 0.56);
+    const leftH = 0.17 + tLines * lh(tPt) + 0.12 + 0.3 + 0.18;
+    const pLines = sc.prompt ? sc.parts.reduce((a, p) => a + estLines(`“${p}”`, pPt, rw), 0) : 1;
+    const wLines = estLines(sc.notice, wPt, rw - WL);
+    const rightH = 0.14 + (sc.resume ? 0.27 : 0) + pLines * lh(pPt) + 0.08 + wLines * lh(wPt) + 0.15;
+    return { sc, tLines, pLines, wLines, h: Math.max(leftH, rightH, big ? 1.5 : 1.1) };
+  });
+  const top = 2.3, bottom = 6.32;
+  const total = rows.reduce((a, r) => a + r.h, 0);
+  const gap = Math.min(0.3, (bottom - top - total) / Math.max(1, n - 1));
+  if (gap < 0.08) console.warn(`demo slide stage ${stage}: rows too tall (gap ${gap.toFixed(2)})`);
+  let y = top;
+  rows.forEach(({ sc, tLines, pLines, wLines, h }, i) => {
+    card(s, M, y, CW, h, { name: `scenario ${sc.title}` });
+    dot(s, String(i + 1), M + 0.25, y + 0.2, 0.42, { size: 15 });
+    const th = tLines * lh(tPt);
+    T(s, sc.title, M + 0.85, y + 0.17, lw - 0.85, th, { fontFace: HEAD, fontSize: tPt, bold: true, color: P.forest });
+    pill(s, "AS " + sc.role.toUpperCase(), M + 0.85, y + 0.17 + th + 0.12, 0.34 + 0.105 * (sc.role.length + 3), 0.3, { size: 11, cs: 1.5 });
+    const rx = M + rOff;
+    let ry = y + 0.14;
+    if (sc.resume) {
+      T(s, "↻  RESUMES THE LATEST SAVED SESSION", rx, ry, rw, 0.24, { fontSize: 11, bold: true, charSpacing: 1.5, color: P.orangeText });
+      ry += 0.27;
+    }
+    const ph = pLines * lh(pPt);
+    if (sc.prompt) T(s, sc.parts.map((p, k) => ({ text: (k === 0 ? "“" : "") + p + (k === sc.parts.length - 1 ? "”" : ""), options: { breakLine: k < sc.parts.length - 1 } })), rx, ry, rw, ph, { fontSize: pPt, color: P.ink, objectName: "prompt" });
+    else T(s, [{ text: "No prompt: press " }, { text: "Compact now", options: { bold: true, color: P.forest } }, { text: " in the drawer." }], rx, ry, rw, ph, { fontSize: pPt, italic: true, color: P.ink, objectName: "prompt" });
+    ry += ph + 0.08;
+    T(s, "WATCH", rx, ry, WL, lh(wPt), { fontSize: 11, bold: true, charSpacing: 2, color: P.muted, valign: "middle" });
+    T(s, sc.notice, rx + WL, ry, rw - WL, wLines * lh(wPt), { fontSize: wPt, color: P.forest, objectName: "watch" });
+    y += h + gap;
+  });
+  compStrip(s, 6.5, stage);
   return s;
 }
 
@@ -409,7 +478,7 @@ function stageCodeSlide(stage, section, { heading, line, notes }) {
   const r = codeBlock(s, { y: y0, code: sn.code, marks: kws, maxPt: 26, maxH: 2.05, caption: snipCaption(sn, stage) });
   const ty = r.bottom + 0.3;
   T(s, [
-    { text: stage === 0 ? "New keyword:  " : `${kws.length} new keywords:  `, options: { color: P.muted } },
+    { text: kws.length === 1 ? (stage === 0 ? "New keyword:  " : "1 new keyword:  ") : `${kws.length} new keywords:  `, options: { color: P.muted } },
     ...kws.flatMap((k, i) => [{ text: k, options: { fontFace: MONO, color: P.markText, highlight: P.ring } }, ...(i < kws.length - 1 ? [{ text: "   " }] : [])]),
   ], M, ty, CW, 0.42, { fontSize: 20 });
   T(s, line, M, ty + 0.52, CW, 0.42, { fontSize: 20, color: P.ink });
@@ -420,10 +489,13 @@ function stageCodeSlide(stage, section, { heading, line, notes }) {
 // ---------------------------------------------------------------- snippet slide (a tool, a def)
 function snippetSlide(stage, section, { heading, titleStart, line, notes, maxH = 4.3, y = 2.12 }) {
   const sn = snip(stage, titleStart);
-  const s = newSlide("K_CONTENT", section, { title: heading, points: [line], notes, snippets: [`${sn.file} [stage:${stage}] "${sn.title}"`] });
-  kicker(s, kickerFor(stage));
+  return codeSlide(stage, section, { heading, line, notes, maxH, y, code: sn.code, caption: snipCaption(sn, stage), ref: `${sn.file} [stage:${stage}] "${sn.title}"` });
+}
+function codeSlide(stage, section, { heading, line, notes, maxH = 4.3, y = 2.12, code, caption, ref, kick }) {
+  const s = newSlide("K_CONTENT", section, { title: heading, points: line ? [line] : [], notes, snippets: [ref] });
+  kicker(s, kick ?? kickerFor(stage));
   title(s, heading);
-  const r = codeBlock(s, { y, code: sn.code, maxPt: 22, maxH, caption: snipCaption(sn, stage) });
+  const r = codeBlock(s, { y, code, maxPt: 22, maxH, caption });
   if (line) T(s, line, M, r.bottom + 0.22, CW, 0.45, { fontSize: 20, color: P.ink, objectName: "takeaway" });
   return { s, r };
 }
@@ -623,41 +695,73 @@ stageCodeSlide(0, "Stage 0 · Chatbot", {
   notes: "Stage zero is the baseline, and in code it is literally one line: an Agent with a model and nothing else. One generic system prompt, a message list kept in memory, one streamed model call per turn. No tools, no company knowledge, no memory across restarts. Look at the strip: the model in the middle, and all four components gray. Let's see how far that gets us.",
 });
 demoSlide(0, "Stage 0 · Chatbot",
-  "Switch to the browser, stage 0. Run 'Does it know us?' as sales. The prompt is: What do you know about Kestrel Software and our proposal process? Watch: the model either guesses about Kestrel or admits it doesn't know. Only the Model lights up, nothing else in the strip moves. That's our baseline. Then come back to the slides.");
+  "Switch to the browser, stage 0. Two runs, both as sales, and this is where the Acme Robotics renewal story starts. First, 'Who's Acme?': Who is Acme Robotics and when is their renewal due? It can't know: nothing is around the model, so it guesses or says it doesn't know. Second, 'Price the renewal': Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing. It invents a price, or asks for one; it has no idea what our plans cost. Remember that prompt: we run it again at stage 1. Then come back to the slides.");
 
 // ---------------------------------------------------------------- Stage 1 · Context
+// AGENTS.md headings and size, read from the file at build time
+const AGENTS_MD = fs.readFileSync(path.join(REPO, "company", "AGENTS.md"), "utf8");
+const AGENTS_HEADS = [...AGENTS_MD.matchAll(/^## (.+)$/gm)].map((m) => m[1].replace(/\s*\(.*\)\s*$/, "").trim());
+const AGENTS_WORDS = Math.round(AGENTS_MD.split(/\s+/).filter(Boolean).length / 10) * 10;
 {
   const s = newSlide("K_CONTENT", "Stage 1 · Context", {
-    title: "Context: always-on instructions", points: ["company/AGENTS.md becomes the system prompt", "Facts the model can't guess", "Conventions: tone, format, citations", "Sent with every call: keep it short"],
-    notes: "The first component is context: what the model knows before it starts. The cheapest, highest-leverage piece is an always-on instruction file, and we use company/AGENTS.md as the system prompt. It holds the facts the model can't guess, like our plans and prices and who the teams are, and the conventions we want followed. It's about 480 words, and that's on purpose: it's sent on every single call, so every line has to earn its place.",
+    title: "Context we push, on every call",
+    points: ["company/AGENTS.md becomes the system prompt", "Pushed on every call: facts, plans and prices, business rules", "The request is identical to stage 0 except the system prompt", "Every line costs tokens on every call: keep it short"],
+    notes: `The first component is context: what the model knows before it starts. Stage 1 adds exactly one thing: company/AGENTS.md becomes the system prompt. It holds what the model can't guess: who we are, our plans and list prices, and the business rules every answer has to follow, like 'discounts above 10% need written approval from finance'. This is context we push: it rides along on every single call, whether the task needs it or not. Look at the request on the right. Compared to stage 0, nothing changed except the system prompt: same single call, no tools, no loop. The file is about ${AGENTS_WORDS} words on purpose, because every line costs tokens every time.`,
   });
-  kicker(s, kickerFor(1));
-  title(s, "Context starts with one always-on file");
-  card(s, M, 2.1, 5.9, 4.55);
-  card(s, M, 2.1, 5.9, 0.62, { fill: P.forestSoft, line: P.line });
-  T(s, "company/AGENTS.md  →  system prompt", M + 0.3, 2.1, 5.4, 0.62, { fontFace: MONO, fontSize: 16, bold: true, color: P.forest, valign: "middle" });
-  const heads = ["The company", "Plans and list prices", "Teams and what they use you for", "Working conventions", "Tone", "Things you never do"];
-  T(s, heads.map((h, i) => ({ text: "## " + h, options: { breakLine: i < heads.length - 1 } })), M + 0.3, 2.95, 5.4, 3.0, { fontFace: MONO, fontSize: 18, color: P.ink, paraSpaceAfter: 8 });
-  T(s, "about 480 words · real headings from the file", M + 0.3, 6.12, 5.4, 0.3, { fontSize: 14, color: P.muted });
-  const rx = M + 6.4, rw = CW - 6.4;
-  const pts = [["Facts it can't guess", "Plans, prices, teams, who we are."], ["Conventions", "Tone, format, always cite record ids."], ["Sent on every call", "So keep it short. Every line costs."]];
-  pts.forEach(([h, b], i) => {
-    const y = 2.1 + i * 1.55;
-    dot(s, "✓", rx, y + 0.05, 0.46, { fill: P.lime, color: P.forest, size: 16, font: "Segoe UI Symbol" });
-    T(s, h, rx + 0.7, y, rw - 0.7, 0.5, { fontFace: HEAD, fontSize: 24, bold: true, color: P.forest });
-    T(s, b, rx + 0.7, y + 0.52, rw - 0.7, 0.45, { fontSize: 20 });
+  kicker(s, kickerFor(1) + " · pushed");
+  title(s, "Context we push, on every call");
+  const lw = 5.4;
+  card(s, M, 2.1, lw, 4.55);
+  card(s, M, 2.1, lw, 0.62, { fill: P.forestSoft, line: P.line });
+  T(s, "company/AGENTS.md  →  system prompt", M + 0.3, 2.1, lw - 0.5, 0.62, { fontFace: MONO, fontSize: 16, bold: true, color: P.forest, valign: "middle" });
+  T(s, AGENTS_HEADS.map((h, i) => ({ text: "## " + h, options: { breakLine: i < AGENTS_HEADS.length - 1 } })), M + 0.3, 2.95, lw - 0.5, 3.0, { fontFace: MONO, fontSize: 16, color: P.ink, paraSpaceAfter: 9 });
+  T(s, `about ${AGENTS_WORDS} words · the file's own headings`, M + 0.3, 6.12, lw - 0.5, 0.3, { fontSize: 14, color: P.muted });
+  // the request, stage 0 vs stage 1
+  const rx = M + lw + 0.4, rw = W - M - rx, gap = 0.25, cw = (rw - gap) / 2;
+  T(s, "THE REQUEST · STAGE 0 VS STAGE 1", rx, 2.1, rw, 0.24, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
+  const cols = [
+    ["Stage 0", [["system", "“You are a helpful assistant.”"], ["messages", "the user's prompt"], ["tools", "none"]]],
+    ["Stage 1", [[`system · ${AGENTS_WORDS} words`, "company/AGENTS.md"], ["messages", "the user's prompt"], ["tools", "none"]]],
+  ];
+  cols.forEach(([head, rows], c) => {
+    const x = rx + c * (cw + gap);
+    T(s, head, x, 2.42, cw, 0.36, { fontFace: HEAD, fontSize: 18, bold: true, color: P.forest, valign: "middle" });
+    rows.forEach(([k, v], j) => {
+      const y = 2.9 + j * 0.72, hot = c === 1 && j === 0;
+      card(s, x, y, cw, 0.62, { fill: hot ? P.ring : P.surface, line: hot ? P.orange : P.line, lw: hot ? 1.75 : 1, r: 0.08, name: `request ${head} ${k}` });
+      T(s, k.toUpperCase(), x + 0.18, y + 0.07, cw - 0.3, 0.18, { fontSize: 9, bold: true, charSpacing: 2, color: hot ? P.orangeText : P.muted });
+      T(s, v, x + 0.18, y + 0.26, cw - 0.28, 0.3, { fontSize: 14, bold: hot, color: hot ? P.markText : P.ink, valign: "middle" });
+    });
   });
+  T(s, "PUSHED ON EVERY CALL", rx, 5.12, rw, 0.24, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
+  let px = rx;
+  ["Facts", "Plans and prices", "Business rules"].forEach((t) => { const w = 0.5 + 0.115 * t.length; pill(s, t, px, 5.42, w, 0.42, { size: 16, bold: false }); px += w + 0.18; });
+  T(s, "Only the system prompt changed. Same single call: no tools, no loop.", rx, 6.02, rw, 0.62, { fontSize: 18, color: P.ink });
 }
+stageCodeSlide(1, "Stage 1 · Context", {
+  heading: "Stage 1 in code",
+  line: "AGENTS.md is the system prompt. Nothing else about the call changes.",
+  notes: "In code, stage 1 is one keyword: instructions, pointing at AGENTS.md. The harness reads the file when the agent is built and sends it as the system prompt. No tools, no skills, no loop yet: it is exactly the stage 0 call with a better system prompt. In the strip, Context is in, with the orange ring because we just added it.",
+});
+demoSlide(1, "Stage 1 · Context",
+  "Back to the browser, stage 1, still as sales. First, 'Price the renewal, again': the exact same prompt as stage 0, draft a renewal proposal for Acme Robotics, 40 seats on our Enterprise plan, with pricing. Now the price comes from the plan table, $2,400 per seat per year, in our tone and our sections, with no discount. Look at tokens in on the facts line: it jumped, because AGENTS.md rides on every call. And notice we still had to tell it who Acme is. Second, 'Can I discount?': Can I offer Acme 15% off to close this quarter? No: above 10% needs written approval from finance, straight from AGENTS.md. That's a business rule, not a fact. What it can't do yet is look anything up: that's the next component.");
+
+// ---------------------------------------------------------------- Stage 2 · Actions
+snippetSlide(2, "Stage 2 · Actions", {
+  heading: "A tool is a typed, documented function", titleStart: "A tool is a typed",
+  line: "@tool turns the type hints and docstring into the schema the model sees. ctx is injected.",
+  notes: "AGENTS.md can't hold every customer record, which is why we still had to say who Acme is. So the second component is actions: the model fetches facts itself. A tool is just a typed async function with a docstring. This is lookup_customer, exactly as it is in the repo. The @tool decorator reads the type hints and the docstring and generates the JSON schema the model sees; ctx is injected by the harness and never shown to the model. It takes an id or part of a name. And when nothing matches, the error is written for the model: it points at list_customers instead of letting it guess.",
+});
 {
-  const s = newSlide("K_CONTENT", "Stage 1 · Context", {
-    title: "Context: skills, on demand", points: ["The prompt lists each skill: name + one line", "The model calls load_skill when it needs one", "The full SKILL.md enters context only then", "Why not stuff it all in: cost, distraction, scale"],
-    notes: "But you can't put everything in the system prompt. Every token costs on every turn, and rules that don't apply to this task distract the model. So skills are procedures on demand. The prompt only lists each skill's name and its one-line description, straight from the SKILL.md frontmatter. When the model decides it needs one, it calls load_skill, and only then does the full text enter the conversation. That's progressive disclosure: the index is always there, the body only when needed.",
+  const s = newSlide("K_CONTENT", "Stage 2 · Actions", {
+    title: "Skills: an index now, the body on demand", points: ["Stage 1 pushed AGENTS.md on every call; skills are context the model pulls", "The prompt lists each skill: name + one line", "The model calls load_skill when a task needs one", "The full SKILL.md enters context only then"],
+    notes: "Stage 1 was context we push: AGENTS.md rides on every call. That doesn't scale to every playbook we have. So at stage 2, next to the tools that pull facts, we add context the model pulls: skills. The prompt only lists each skill's name and its one-line description, straight from the SKILL.md frontmatter. When a task needs one, the model calls load_skill, and only then does the full text enter the conversation. That's progressive disclosure: cheaper, less distracting, and it scales. It needs the loop, a tool call and then another model call, which is why it arrives here and not at stage 1.",
   });
-  kicker(s, kickerFor(1));
+  kicker(s, kickerFor(2) + " · context the model pulls");
   title(s, "Skills: an index now, the body on demand");
   const lw = 6.9;
   card(s, M, 2.1, lw, 3.85);
-  T(s, "IN THE SYSTEM PROMPT, ALWAYS", M + 0.3, 2.32, 6, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
+  T(s, "IN THE SYSTEM PROMPT, EVERY CALL", M + 0.3, 2.32, 6, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
   const sk = [["proposal-writing", "drafting customer proposals"], ["issue-triage", "triaging customer issues"], ["revenue-brief", "summarizing revenue"]];
   sk.forEach(([n, d], i) => {
     const y = 2.72 + i * 1.02;
@@ -669,35 +773,23 @@ demoSlide(0, "Stage 0 · Chatbot",
   arrow(s, M + lw + 0.05, 3.15, rx - 0.05, 3.15, { color: P.orange, width: 2.25 });
   T(s, "load_skill", M + lw, 2.72, 1.55, 0.35, { fontFace: MONO, fontSize: 14, bold: true, color: P.orangeText, align: "center" });
   card(s, rx, 2.1, rw, 3.85, { fill: P.forestSoft, line: P.lime });
-  T(s, "ENTERS CONTEXT ONLY NOW", rx + 0.3, 2.32, rw - 0.5, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
+  T(s, "PULLED ONLY WHEN NEEDED", rx + 0.3, 2.32, rw - 0.5, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
   T(s, "skills/proposal-writing/SKILL.md", rx + 0.3, 2.62, rw - 0.5, 0.35, { fontFace: MONO, fontSize: 13, bold: true, color: P.forest });
   T(s, "Required sections, tone, what never to promise.", rx + 0.3, 3.1, rw - 0.6, 1.0, { fontSize: 20 });
   [0, 1, 2, 3].forEach((i) => s.addShape(S.ROUNDED_RECTANGLE, { x: rx + 0.3, y: 4.35 + i * 0.36, w: (rw - 0.6) * [0.95, 0.8, 0.9, 0.6][i], h: 0.14, rectRadius: 0.07, fill: { color: "D7E2CF" }, line: { type: "none" }, objectName: "text line" }));
-  T(s, "Index always there, body only when needed: cheaper, less distracting, and it scales.", M, 6.2, CW, 0.5, { fontSize: 20, color: P.ink });
+  T(s, [{ text: "Context the model pulls", options: { bold: true, color: P.forest } }, { text: ", like a tool pulls a fact. The body arrives only when needed." }], M, 6.2, CW, 0.5, { fontSize: 20, color: P.ink });
 }
-stageCodeSlide(1, "Stage 1 · Context", {
-  heading: "Stage 1 in code",
-  line: "AGENTS.md as the prompt; a skills index plus load_skill.",
-  notes: "In code, context is two keywords. instructions points at AGENTS.md; skills points at the skills folder. The harness builds the skills index from each SKILL.md's frontmatter and installs the load_skill tool for us. The loop itself hasn't changed at all. And look at the strip: Context is in, with the orange ring because we just added it.",
-});
-snippetSlide(1, "Stage 1 · Context", {
-  heading: "load_skill is the whole mechanism", titleStart: "Skills load on demand",
+codeSlide(2, "Stage 2 · Actions", {
+  heading: "load_skill is the whole mechanism", code: DATA.load_skill, maxH: 4.0, y: 2.2,
+  caption: "harness/context.py  ·  inside make_load_skill_tool(skills)",
+  ref: "harness/context.py make_load_skill_tool(): the inner load_skill, verbatim (read with ast at build time)",
   line: "An unknown name raises a ToolError: the model gets the valid names back and can correct itself.",
-  notes: "And this is the tool the harness installs, the real code. It's eight lines. It looks the name up and returns the skill's body. Notice the error path: if the model asks for a skill that doesn't exist, it doesn't crash, it raises a ToolError, and the message goes back to the model with the list of valid names. Errors written for the model to read are a recurring pattern in a good harness.",
-});
-demoSlide(1, "Stage 1 · Context",
-  "Back to the browser, stage 1. Run 'Skill-guided draft' as sales. The prompt asks it to use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, 40 seats, they care about SSO and audit logs. You'll see load_skill fire and the Context card pulse, and the draft follows the skill's required sections. But notice we had to tell it who Acme is: it can't look anything up yet. That's the next component.");
-
-// ---------------------------------------------------------------- Stage 2 · Actions
-snippetSlide(2, "Stage 2 · Actions", {
-  heading: "A tool is a typed, documented function", titleStart: "A tool is a typed",
-  line: "@tool turns the type hints and docstring into the schema the model sees. ctx is injected.",
-  notes: "The second component is actions. A tool is just a typed async function with a docstring. This is lookup_customer, exactly as it is in the repo. The @tool decorator reads the type hints and the docstring and generates the JSON schema the model sees; ctx is injected by the harness and never shown to the model. And again, when nothing matches, the error tells the model which customers do exist.",
+  notes: "And this is the tool the skills keyword installs, the real code from context.py. It's a closure over the discovered skills: look the name up, return the body. Notice the error path: if the model asks for a skill that doesn't exist, nothing crashes; it raises a ToolError, and the message goes back to the model with the list of valid names. Errors written for the model to read are a recurring pattern in a good harness.",
 });
 {
   const s = newSlide("K_CONTENT", "Stage 2 · Actions", {
-    title: "Actions: middleware in the loop", points: ["Small objects the loop calls at fixed points", "Hooks: before_model, after_model, before_tool, after_tool", "CallLimit: stops runaway loops", "TodoTracker: a visible plan via update_todos"],
-    notes: `Once the model can act, we need a place to put rules about acting. Middleware is a small object the loop calls at fixed points: before and after each model call, and before and after each tool call. Two ship in stage 2. CallLimit counts calls, ${LIMITS.model} model calls and ${LIMITS.tool} tool calls per run, and stops a runaway loop with a reason. TodoTracker gives the model an update_todos tool, so long tasks stay organized and we can watch its plan. Everything in the next stage, boundaries, is middleware too.`,
+    title: "Actions: middleware in the loop", points: ["Small objects the loop calls at fixed points", "Hooks: before_model, after_model, before_tool, after_tool", `CallLimit: ${LIMITS.model} model calls and ${LIMITS.tool} tool calls per run`, "TodoTracker-style planning: one more middleware you could add"],
+    notes: `A loop that keeps calling tools needs a brake, and the place for rules about acting is middleware: a small object the loop calls at fixed points, before and after each model call and before and after each tool call. Stage 2 ships exactly one: CallLimit, a budget of ${LIMITS.model} model calls and ${LIMITS.tool} tool calls per run. Past it, the call is denied or the run stops, always with a reason the model can report. Planning in the style of TodoTracker, an update_todos tool and a plan you can watch in the UI, is one more middleware you could add the same way. And everything in the next stage, boundaries, is middleware too.`,
   });
   kicker(s, kickerFor(2));
   title(s, "Middleware: rules at fixed points");
@@ -713,50 +805,56 @@ snippetSlide(2, "Stage 2 · Actions", {
   });
   T(s, "dashed = a hook any middleware can implement", M, y + hh + 0.14, CW, 0.3, { fontSize: 14, color: P.muted });
   const by = 4.05, bw = (CW - 0.35) / 2;
-  [["CallLimit", "before_model · before_tool", `${LIMITS.model} model calls and ${LIMITS.tool} tool calls per run. Then the run stops, with a reason.`],
-    ["TodoTracker", "adds the update_todos tool", "The model writes and updates its own plan. We watch it in the UI."]].forEach(([n, hook, b], i) => {
-    const x = M + i * (bw + 0.35);
-    card(s, x, by, bw, 2.15);
-    T(s, n, x + 0.35, by + 0.28, bw - 0.7, 0.5, { fontFace: MONO, fontSize: 24, bold: true, color: P.forest });
-    T(s, hook, x + 0.35, by + 0.8, bw - 0.7, 0.3, { fontSize: 14, color: P.muted });
-    T(s, b, x + 0.35, by + 1.15, bw - 0.7, 0.9, { fontSize: 20 });
-  });
+  // stage 2's one middleware
+  card(s, M, by, bw, 2.15, { fill: P.surface, line: P.blue, lw: 1.5, name: "CallLimit card" });
+  pill(s, "IN STAGE 2", M + bw - 1.7, by + 0.8, 1.35, 0.3, { size: 10, cs: 1.5, fill: P.blue, color: P.white });
+  T(s, "CallLimit", M + 0.35, by + 0.28, bw - 0.7, 0.5, { fontFace: MONO, fontSize: 24, bold: true, color: P.forest });
+  T(s, "before_model · before_tool", M + 0.35, by + 0.8, bw - 0.7, 0.3, { fontSize: 14, color: P.muted });
+  T(s, `${LIMITS.model} model calls, ${LIMITS.tool} tool calls per run. Then a deny or a stop, with a reason.`, M + 0.35, by + 1.15, bw - 0.7, 0.9, { fontSize: 20 });
+  // one you could add
+  const x2 = M + bw + 0.35;
+  card(s, x2, by, bw, 2.15, { fill: P.gray, line: "C9CEC0", dash: "dash", name: "could-add card" });
+  pill(s, "YOU COULD ADD", x2 + bw - 1.95, by + 0.8, 1.6, 0.3, { size: 10, cs: 1.5, fill: P.surface, color: P.muted, line: "C9CEC0" });
+  T(s, "TodoTracker-style planning", x2 + 0.35, by + 0.28, bw - 0.7, 0.5, { fontFace: HEAD, fontSize: 20, bold: true, color: P.forest, valign: "middle" });
+  T(s, "one more middleware", x2 + 0.35, by + 0.8, bw - 0.7, 0.3, { fontSize: 14, color: P.muted });
+  T(s, "Adds an update_todos tool; the model keeps a plan we can watch.", x2 + 0.35, by + 1.15, bw - 0.7, 0.9, { fontSize: 20 });
   T(s, "Next stage, every boundary is middleware too.", M, 6.42, CW, 0.4, { fontSize: 20, color: P.orangeText, italic: true });
 }
 snippetSlide(2, "Stage 2 · Actions", {
   heading: "A subagent is a definition", titleStart: "A subagent:",
-  line: "Own prompt, one tool, a cheaper model, a clean context. Only its checklist comes back.",
+  line: "Own prompt, a subset of tools, a cheaper model, a clean context. Only its checklist comes back.",
   notes: "Some work is better done in a separate room. A subagent has its own prompt, its own small set of tools, and runs on a cheaper model, here the subagent model from .env. It starts with a clean context, does its job, and hands back only a summary, so the main conversation doesn't fill up with its working. Our proposal-reviewer checks a draft against the customer record and returns three headings: Supported, Unsupported, Missing. It's just data; the harness turns it into a run_subagent tool.",
 });
 stageCodeSlide(2, "Stage 2 · Actions", {
   heading: "Stage 2 in code",
-  line: "Company tools, two middlewares, one subagent.",
-  notes: "Three new keywords: tools, middleware and subagents. The loop that runs tool calls was always there; now it finally has something to do. Notice the subagent is just the definition we saw, and the harness turns it into a run_subagent tool the main agent can call. In the strip, Context is blue and Actions has the orange ring.",
+  line: "Company tools, a call budget, skills on demand, one subagent.",
+  notes: "Four new keywords: tools, middleware, skills and subagents. The loop that runs tool calls was always there; now it finally has something to do. skills installs the index and load_skill, subagents turns the reviewer definition into a run_subagent tool, and the only middleware is CallLimit. In the strip, Context is blue and Actions has the orange ring.",
 });
 demoSlide(2, "Stage 2 · Actions",
-  "Stage 2, two runs. First, 'Look it up yourself' as sales: draft a proposal for Acme Robotics and have the proposal-reviewer check it. Watch lookup_customer fire, the todo list appear, and the proposal-reviewer's nested card. Then switch the role to engineering and run 'Runaway loop'. The prompt basically asks it never to stop: for every open issue look up its customer, then every other issue, and check everything twice. CallLimit stops it with a clear reason.");
+  "Stage 2, two runs. First, as sales, 'Prepare the renewal': Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the proposal-reviewer check it before you show it to me. Watch load_skill pull the proposal playbook, lookup_customer and lookup_issue pull the facts, and the reviewer run as a nested subagent row. This time we never said who Acme is: the model fetched what it needed. Then switch the role to engineering and run 'Account health, every customer': Give me an account health report for every customer: their record plus their open issues. A realistic over-sized request: CallLimit denies the 11th tool call, and the model reports partial results and says why.");
 
 // ---------------------------------------------------------------- Stage 3 · Boundaries
 snippetSlide(3, "Stage 3 · Boundaries", {
   heading: "Permissions live in code", titleStart: "Who may use which tool",
   line: "A rule in the prompt is a suggestion. A rule in code is a guarantee.",
-  notes: "Third component: boundaries. Each role gets a set of tools; that's the ROLE_TOOLS table, real code. Sales can send proposals, engineering can look up issues, finance can see revenue. RoleGate checks that set before every tool call. And PROTECTED_PATHS lists what is never writable: the company files, the skills, and the harness's own code. This lives in code, not in the prompt. A prompt that says 'please don't' is a suggestion the model may or may not follow; a denied call is a guarantee. And the model gets the reason back, so it can explain instead of guessing.",
+  notes: "Third component: boundaries. Each role gets a set of tools; that's the ROLE_TOOLS table, real code. Sales can send proposals, engineering can look up issues, finance can see revenue. RoleGate checks that set before every tool call. This lives in code, not in the prompt. A prompt that says 'please don't' is a suggestion the model may or may not follow; a denied call is a guarantee. And the model gets the reason back, so it can explain instead of guessing.",
 });
 {
   const s = newSlide("K_CONTENT", "Stage 3 · Boundaries", {
-    title: "Boundaries: the permission chain", points: ["RoleGate → ProtectedPaths → ApprovalGate → yours → AuditLog", "First deny wins", "ask beats allow: the loop waits for a human", "Every outcome lands in the audit log"],
-    notes: "Every tool call runs through the same chain, in order: RoleGate, protected paths, the approval gate, then the rest of the middleware like CallLimit, and after the tool runs the audit log records the outcome. Each gate answers allow, ask or deny. The first deny wins. An ask beats an allow: the loop pauses and waits for a human to approve or reject. You'll see these decisions spelled out in the demo's event rows.",
+    title: "Boundaries: the permission chain", points: ["RoleGate → ApprovalGate → CallLimit → AuditLog", "First deny wins", "ask beats allow: the loop waits for a human", "Every outcome lands in the audit log"],
+    notes: "Every tool call runs through the same chain, in order: RoleGate checks the role, the ApprovalGate decides whether a human has to say yes, then your own middleware, here CallLimit from stage 2, and after the tool runs the AuditLog writes one line with the outcome. Each gate answers allow, ask or deny. The first deny wins. An ask beats an allow: the loop pauses and waits for a human to approve or reject. Each box comes from one keyword, shown at the bottom of the card. You'll see these decisions spelled out in the demo's event rows.",
   });
   kicker(s, kickerFor(3));
   title(s, "Every tool call walks the same chain");
-  const chain = [["RoleGate", "Is this tool in your role?"], ["ProtectedPaths", "Does it touch a protected path?"], ["ApprovalGate", "Does a human have to say yes?"], ["CallLimit …", "the rest of the middleware"], ["AuditLog", "after the tool: one line per call"]];
-  const gap = 0.32, cw = (CW - gap * 4) / 5, y = 2.2, hh = 2.0;
-  chain.forEach(([n, q], i) => {
+  const chain = [["RoleGate", "Is this tool in your role?", "permissions="], ["ApprovalGate", "Does a human have to say yes?", "approve="], ["CallLimit", "Still inside the run's budget? (stage 2)", "middleware="], ["AuditLog", "After the tool: one line per call.", "audit="]];
+  const gap = 0.4, cw = (CW - gap * 3) / 4, y = 2.15, hh = 2.15;
+  chain.forEach(([n, q, kw], i) => {
     const x = M + i * (cw + gap);
-    card(s, x, y, cw, hh, { fill: i === 4 ? P.forestSoft : P.surface, line: i === 2 ? P.orange : P.line, lw: i === 2 ? 1.75 : 1 });
-    T(s, n, x + 0.2, y + 0.22, cw - 0.3, 0.45, { fontFace: MONO, fontSize: 17, bold: true, color: P.forest });
-    T(s, q, x + 0.2, y + 0.78, cw - 0.35, 1.1, { fontSize: 18 });
-    if (i < 4) arrow(s, x + cw + 0.03, y + hh / 2, x + cw + gap - 0.03, y + hh / 2);
+    card(s, x, y, cw, hh, { fill: i === 3 ? P.forestSoft : P.surface, line: i === 1 ? P.orange : P.line, lw: i === 1 ? 1.75 : 1 });
+    T(s, n, x + 0.25, y + 0.22, cw - 0.4, 0.45, { fontFace: MONO, fontSize: 20, bold: true, color: P.forest });
+    T(s, q, x + 0.25, y + 0.78, cw - 0.45, 0.85, { fontSize: 18 });
+    T(s, kw, x + 0.25, y + hh - 0.45, cw - 0.4, 0.3, { fontFace: MONO, fontSize: 14, color: P.orangeText });
+    if (i < 3) arrow(s, x + cw + 0.04, y + hh / 2, x + cw + gap - 0.04, y + hh / 2);
   });
   const ry = 4.65;
   [["deny", P.red, P.white, "The first deny wins. The model gets the reason."], ["ask", P.orange, P.markText, "Beats allow. The loop waits for a human."], ["allow", P.lime, P.forest, "Only if every gate allows."]].forEach(([d, f, c, t], i) => {
@@ -773,45 +871,47 @@ snippetSlide(3, "Stage 3 · Boundaries", {
 stageCodeSlide(3, "Stage 3 · Boundaries", {
   heading: "Stage 3 in code",
   line: "Same tools as stage 2; now they run under rules.",
-  notes: "Four keywords: permissions, approve, protected_paths and audit. Notice what didn't change: the tools. send_proposal is the same function it was in stage 2; we just told the harness it needs a human. Boundaries now has the orange ring in the strip.",
+  notes: "Three keywords: permissions, approve and audit. Notice what didn't change: the tools. send_proposal is the same function it was in stage 2; we just told the harness it needs a human. Boundaries now has the orange ring in the strip.",
 });
 demoSlide(3, "Stage 3 · Boundaries",
-  "Stage 3, three runs. As engineering, ask: What was our revenue in FY2026? RoleGate denies get_revenue, and the model says so instead of guessing. Same question as finance: answered, with record ids. Then as sales, send the Acme Robotics proposal to ceo@acme-robotics.example with the subject Kestrel Enterprise proposal. An approval card appears, and the Boundaries card says waiting on you. Approve it and a file lands in the outbox, never a real email, plus an audit line. If the address isn't the contact on record, the tool itself rejects it.");
+  "Stage 3, three runs. As engineering, 'Wrong role': What was our revenue in FY2026? RoleGate denies get_revenue in code, before it runs, and the model says so instead of guessing. 'Right role': the same question as finance, allowed, answered with record ids. Then as sales, 'Send it': draft a short renewal proposal for Acme Robotics and send it to procurement@acme-robotics.example with the subject Kestrel renewal proposal. The approval card appears and the loop waits; the Boundaries card says waiting on you. Approve, and a file lands in the outbox, never a real email, plus an audit line. Variant if there's time: ask it to send to ceo@acme-robotics.example instead, and the tool itself rejects the address as not on record.");
 
 // ---------------------------------------------------------------- Stage 4 · Persistence
 {
   const s = newSlide("K_CONTENT", "Stage 4 · Persistence", {
-    title: "Persistence: save and resume", points: ["Every message checkpointed to SQLite", "List sessions; resume one tomorrow", "workspace/: the one folder it may write", "Writes elsewhere are blocked"],
-    notes: "Fourth component: persistence. Until now, history lived in memory, so restart the server and it's gone. Now every message is checkpointed to SQLite, so you can list sessions and resume one tomorrow exactly where you left off. The agent also gets a workspace folder, the one place it may write files. Everything else, company files, skills, the harness code, stays protected by the boundaries we just added.",
+    title: "Persistence: save and resume", points: ["Every message checkpointed to SQLite", "New in the demo: a Sessions sidebar (list, click to resume, New task)", "workspace/: the one folder the file tools write to", "Any path outside it is refused by the tool itself"],
+    notes: "Fourth component: persistence. Until now history lived in memory: restart the server and it's gone. Now every message is checkpointed to SQLite. In the demo that shows up as something new: a Sessions sidebar to the left of the chat, with the saved sessions newest first. Click one and it resumes in place, or press New task to start fresh. The agent also gets a workspace folder with three file tools, and it's the only place they write: the tools themselves refuse any path outside workspace/, so the company files, the skills and the harness code stay untouched.",
   });
   kicker(s, kickerFor(4));
   title(s, "Save every message. Resume tomorrow");
   const lw = 6.3;
-  card(s, M, 2.1, lw, 4.5);
-  T(s, "CHECKPOINTS", M + 0.35, 2.32, 4, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
-  const msgs = [["user", "Save the Acme proposal…"], ["assistant", "write_workspace_file …"], ["tool", "Saved 2,140 characters to …"], ["assistant", "Saved as workspace/acme-…"]];
-  msgs.forEach(([r, t], i) => {
-    const y = 2.72 + i * 0.66;
-    pill(s, r, M + 0.35, y + 0.06, 1.35, 0.38, { size: 13, bold: false, fill: r === "user" ? P.forestSoft : P.gray, color: P.ink });
-    T(s, t, M + 1.85, y, 3.1, 0.5, { fontSize: 16, color: P.ink, valign: "middle" });
-    dot(s, "✓", M + lw - 0.75, y + 0.06, 0.38, { fill: P.lime, color: P.forest, size: 12, font: "Segoe UI Symbol" });
+  card(s, M, 2.1, lw, 4.55, { name: "sessions sidebar" });
+  T(s, "SESSIONS · SQLITE", M + 0.35, 2.3, 3, 0.24, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted, valign: "middle" });
+  pill(s, "+ New task", M + lw - 1.85, 2.24, 1.5, 0.36, { size: 13, fill: P.forest, color: P.white });
+  const sess = [["Draft a short renewal proposal for Acme…", "SALES · 6 MESSAGES · 09:41", true], ["Who is Acme Robotics and when is…", "SALES · 4 MESSAGES · YESTERDAY", false], ["Give me an account health report…", "ENGINEERING · 12 MESSAGES · MON", false]];
+  sess.forEach(([t, meta, open], i) => {
+    const y = 2.8 + i * 0.8;
+    card(s, M + 0.35, y, lw - 0.7, 0.68, { fill: open ? P.forestSoft : P.surface, line: open ? P.lime : P.line, lw: open ? 1.5 : 1, r: 0.08, name: "session row" });
+    T(s, t, M + 0.55, y + 0.07, lw - 1.1, 0.32, { fontSize: 16, bold: open, color: P.ink, valign: "middle" });
+    T(s, meta, M + 0.55, y + 0.4, lw - 1.1, 0.2, { fontSize: 9, bold: true, charSpacing: 1.5, color: open ? P.forest : P.muted });
   });
-  card(s, M + 0.35, 5.5, lw - 0.7, 0.8, { fill: P.forest, noLine: true });
-  T(s, [{ text: "SessionStore", options: { fontFace: MONO, bold: true, color: P.white } }, { text: "   SQLite · list · resume", options: { color: P.lime } }], M + 0.6, 5.5, lw - 1.1, 0.8, { fontSize: 18, valign: "middle" });
+  T(s, "click one: it resumes in place", M + 0.35, 5.22, lw - 0.7, 0.28, { fontSize: 14, color: P.orangeText, italic: true });
+  card(s, M + 0.35, 5.62, lw - 0.7, 0.75, { fill: P.forest, noLine: true });
+  T(s, [{ text: "SessionStore", options: { fontFace: MONO, bold: true, color: P.white } }, { text: "   SQLite · every message", options: { color: P.lime } }], M + 0.6, 5.62, lw - 1.1, 0.75, { fontSize: 17, valign: "middle" });
   const rx = M + lw + 0.4, rw = W - M - rx;
-  T(s, "FILES", rx, 2.32, 4, 0.22, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted });
+  T(s, "FILE TOOLS WRITE HERE ONLY", rx, 2.3, rw, 0.24, { fontSize: 10, bold: true, charSpacing: 2, color: P.muted, valign: "middle" });
   const dirs = [["workspace/", true], ["company/", false], ["skills/", false], ["harness/", false], ["app/", false]];
   dirs.forEach(([d, ok], i) => {
-    const y = 2.7 + i * 0.78;
-    card(s, rx, y, rw, 0.64, { fill: ok ? P.forestSoft : P.surface, line: ok ? P.lime : P.line, lw: ok ? 1.5 : 1 });
-    T(s, d, rx + 0.3, y, rw - 2.5, 0.64, { fontFace: MONO, fontSize: 18, bold: ok, color: ok ? P.forest : P.muted, valign: "middle" });
-    T(s, ok ? "✓ writable" : "✕ protected", rx + rw - 2.25, y, 2.0, 0.64, { fontSize: 16, bold: true, color: ok ? P.forest : P.red, align: "right", valign: "middle" });
+    const y = 2.8 + i * 0.74;
+    card(s, rx, y, rw, 0.6, { fill: ok ? P.forestSoft : P.surface, line: ok ? P.lime : P.line, lw: ok ? 1.5 : 1 });
+    T(s, d, rx + 0.3, y, 2.0, 0.6, { fontFace: MONO, fontSize: 18, bold: ok, color: ok ? P.forest : P.muted, valign: "middle" });
+    T(s, ok ? "✓ writable" : "✕ refused by the tool", rx + rw - 3.05, y, 2.8, 0.6, { fontSize: 16, bold: true, color: ok ? P.forest : P.red, align: "right", valign: "middle" });
   });
 }
 snippetSlide(4, "Stage 4 · Persistence", {
   heading: "Writes are confined to workspace/", titleStart: "Writes are confined",
   line: "The path is resolved first, then checked. \"../\" can't climb out.",
-  notes: "Here's the write tool, real code. The interesting line is the comment: the path is resolved and then checked with is_relative_to, so tricks like dot-dot-slash end there. Combined with ProtectedPaths from stage 3, there are two independent checks between the model and the files we care about.",
+  notes: "Here's the write tool, real code. The interesting line is the comment: the path is resolved and then checked with is_relative_to, so tricks like dot-dot-slash end there. The confinement lives in the tool itself, not in the prompt and not in a middleware: whatever the model asks for, a path outside workspace/ is refused, and the model gets the reason back. That's exactly what you'll see when the demo asks it to edit AGENTS.md.",
 });
 {
   const sn = snip(4, "What compaction asks");
@@ -843,7 +943,7 @@ stageCodeSlide(4, "Stage 4 · Persistence", {
   notes: "Three keywords: checkpointer, workspace and compaction. That's the whole agent: five stages, one constructor, and every keyword maps to one card in the strip. The loop, the middleware chain and the approvals are all wired inside Agent from these keywords. All four cards are in now, Persistence with the ring.",
 });
 demoSlide(4, "Stage 4 · Persistence",
-  "Stage 4. As sales, ask it to save the Acme proposal we discussed as workspace/acme-proposal.md. Watch the Persistence card and the checkpoint counter. Then ask it to write to company/AGENTS.md and see it blocked. Open the drawer, go to Sessions, resume the session, and ask: What did we save earlier, and what was in it? It answers from history without re-reading anything. Finally hit Compact now and look for the summary marker under the strip.");
+  "Stage 4, and the first thing to notice is the new Sessions sidebar sliding in to the left of the chat: saved sessions from SQLite, newest first, and a New task button. Three runs, all as sales. 'Save the draft': draft a short renewal proposal for Acme Robotics, save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the Acme draft is done. write_workspace_file writes the draft and the checkpoint counter ticks up; the AGENTS.md write is refused by the tool, because it is outside workspace/, and the model reports it. 'Pick up yesterday's work': Run resumes the most recent saved session from SQLite, the divider says so, and the session is highlighted in the sidebar; then it asks: Where did we leave off with Acme, and what did we save? It answers from history. You can also just click any session in the sidebar. 'Long day': no prompt, press Compact now in the drawer: 9 messages become 7, with a compaction row holding the summary.");
 
 // ---------------------------------------------------------------- Wrap-up
 {
@@ -922,9 +1022,9 @@ function writeOutline() {
     "Deck: `deck/Kestrel-Desk-Harness-Engineering.pptx` (16:9, light \"paper workbench\" theme matching the approved Kestrel Desk demo UI). Built by `deck/build_deck.js`.", "",
     "Timing: about 25-30 min of slides, interleaved with five live demo stops (→ Demo slides). Speaker notes below are also in the .pptx notes pane.", "",
     "Preview without PowerPoint: `deck/preview/grid-1.jpg` … `grid-4.jpg` (thumbnail grids of every slide, 9 per image, rendered by PowerPoint from this build).", "",
-    `CallLimit numbers on slide 16 (${LIMITS.model} model calls, ${LIMITS.tool} tool calls per run) are read at build time from \`CallLimit.__init__\` defaults in harness/middleware.py.`, "",
+    `CallLimit numbers on slide ${OUTLINE_ROWS.find((r) => r.title.startsWith("Actions: middleware")).n} (${LIMITS.model} model calls, ${LIMITS.tool} tool calls per run) are read at build time from \`CallLimit.__init__\` defaults in harness/middleware.py.`, "",
     "## Snippet sources", "",
-    "Every code slide is cut at build time by `harness.stages.stage_snippet(s)` from the `# [stage:N]` marker blocks in `harness/*.py` (dedented, verbatim). Over-long lines are soft-wrapped on the slide with a muted ↪; no characters are changed.", ""];
+    "Every code slide is cut at build time by `harness.stages.stage_snippet(s)` from the `# [stage:N]` marker blocks in `harness/*.py` (dedented, verbatim); the one exception is the load_skill slide, whose code is the inner `load_skill` function of `make_load_skill_tool` in harness/context.py, cut with `ast` at build time (also verbatim). Over-long lines are soft-wrapped on the slide with a muted ↪; no characters are changed. Demo slides list `harness.stages.scenarios(s)`: titles, roles and prompts verbatim (two long prompts shortened with …, each cut checked against the real prompt), and a watch line made of exact excerpts of each scenario's `watch` text.", ""];
   for (const r of OUTLINE_ROWS) for (const sn of r.snippets || []) lines.push(`- slide ${r.n}: ${sn}`);
   lines.push("- slide 7: `.env` sample (illustrative values; variable names from harness/config.py)", "");
   let sec = null;

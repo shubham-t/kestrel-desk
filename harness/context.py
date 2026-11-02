@@ -1,7 +1,8 @@
 """Context: what the model knows before it does anything.
 
-AGENTS.md is always in the prompt. Skills are listed by name and description only; their
-bodies are loaded on demand with `load_skill`, so the prompt stays small.
+AGENTS.md is always in the prompt (stage 1+): context we push. Skills (stage 2+) are listed by
+name and description only; their bodies are pulled on demand with `load_skill`, so the prompt
+stays small.
 """
 from __future__ import annotations
 
@@ -80,7 +81,8 @@ def build_system_prompt(stage: int, role: str, skills: list[Skill]) -> str:
     """The prompt a given stage ends up with (Agent builds the same text from its keywords)."""
     if stage == 0:
         return DEFAULT_INSTRUCTIONS
-    return compose_prompt(load_agents_md(), role=role, skills=skills,
+    # Stage 1 is AGENTS.md alone; the skills index arrives with load_skill at stage 2 (it needs the loop).
+    return compose_prompt(load_agents_md(), role=role, skills=skills if stage >= 2 else None,
                           boundaries=stage >= 3, workspace=stage >= 4, summaries=stage >= 4)
 
 
@@ -88,7 +90,6 @@ def make_load_skill_tool(skills: list[Skill]) -> Tool:
     """Progressive disclosure: the prompt lists skills; the body arrives only when asked for."""
     by_name = {s.name: s for s in skills}
 
-    # [stage:1] Skills load on demand
     @tool(component="context")
     async def load_skill(name: str, ctx: RunContext) -> str:
         """Load the full instructions of a skill listed in the system prompt.
@@ -96,6 +97,5 @@ def make_load_skill_tool(skills: list[Skill]) -> Tool:
         if name not in by_name:
             raise ToolError(f"Unknown skill '{name}'. Valid names: {', '.join(by_name)}")
         return by_name[name].body
-    # [/stage:1]
 
     return load_skill

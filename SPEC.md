@@ -23,10 +23,10 @@ Five cumulative stages. Stage N contains everything stage N-1 had.
 | Stage | Name | Component | What it adds |
 |---|---|---|---|
 | 0 | Chatbot | model | A system prompt, a message list, one model call. No tools, no memory. |
-| 1 | Context | context | `company/AGENTS.md` as the always-on system prompt; **skills** (`skills/*/SKILL.md`) listed by name/description in the prompt and loaded on demand with a `load_skill` tool. |
-| 2 | Actions | actions | Four company tools; the **agent loop** (model → tool calls → results → model …); **middleware** (`CallLimit`, `TodoTracker`); a **subagent** (`proposal-reviewer`) the main agent can delegate to. |
-| 3 | Boundaries | boundaries | **Role permissions** (`RoleGate` middleware), **protected paths**, **human approval** (`send_proposal` pauses for approve/reject), **audit log**. Enforced in code, not in the prompt. |
-| 4 | Persistence | persistence | **SQLite checkpoints** (list, resume, continue a conversation later); a **writable workspace** with file tools; **context compaction** (`Compactor` middleware summarizes old turns when the prompt grows). |
+| 1 | Context | context | `company/AGENTS.md` as the always-on system prompt. Nothing else: no tool, no loop; the call is identical to stage 0 except the model now knows the company and its rules. |
+| 2 | Actions | actions | Five company tools (a customer directory plus per-record lookups, issues, revenue, send); the **agent loop** (model → tool calls → results → model …); **skills on demand** (`skills/*/SKILL.md` listed by name in the prompt, body pulled with the `load_skill` tool: context the model *pulls* instead of context we *push*); **middleware** (`CallLimit`); a **subagent** (`proposal-reviewer`). |
+| 3 | Boundaries | boundaries | **Role permissions** (`RoleGate` middleware), **human approval** (`send_proposal` pauses for approve/reject), **audit log**. Enforced in code, not in the prompt. |
+| 4 | Persistence | persistence | **SQLite checkpoints** (a sessions sidebar: list, resume, start a new task); a **writable workspace** with file tools that refuse any path outside `workspace/`; **context compaction** (`Compactor` middleware summarizes old turns when the prompt grows). |
 
 ## Repo layout (fixed — do not rename)
 
@@ -105,14 +105,14 @@ def build_agent(stage, role, *, session_id=None, approvals=None, llm=None, store
         return Agent(model=llm, **common)
         # [/stage:0]
     if stage == 1:
-        # [stage:1] Context: company instructions and skills
-        return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", skills=SKILLS_DIR, **common)
+        # [stage:1] Context: the company file, always on
+        return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", **common)
         # [/stage:1]
     if stage == 2:
-        # [stage:2] Actions: tools, a loop with middleware, a subagent
-        return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", skills=SKILLS_DIR,
-                     tools=COMPANY_TOOLS, middleware=[CallLimit(), TodoTracker()],
-                     subagents=[PROPOSAL_REVIEWER], **common)
+        # [stage:2] Actions: tools, a loop with middleware, skills on demand, a subagent
+        return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md",
+                     tools=COMPANY_TOOLS, middleware=[CallLimit()],
+                     skills=SKILLS_DIR, subagents=[PROPOSAL_REVIEWER], **common)
         # [/stage:2]
     ...
 ```
@@ -123,20 +123,19 @@ def build_agent(stage, role, *, session_id=None, approvals=None, llm=None, store
 |---|---|---|
 | `model` | `LLM \| str \| None` | a `str` is a model id → `make_llm(model)`; `None` → `make_llm()` |
 | `instructions` | `str \| Path` | system prompt; a `Path` is read at construction. Default `"You are a helpful assistant."` |
-| `skills` | `Path \| None` | `discover_skills(dir)` → skills index appended to the prompt + `load_skill` tool |
+| `skills` | `Path \| None` | `discover_skills(dir)` → skills index appended to the prompt + `load_skill` tool (stage 2+: it needs the loop) |
 | `tools` | `list[Tool]` | registered as-is |
 | `middleware` | `list[Middleware]` | appended after the ones installed by the keywords below |
 | `subagents` | `list[SubagentDef]` | `run_subagent` tool |
 | `permissions` | `dict[str, set[str]] \| None` | `RoleGate(permissions)`; also appends the role line to the prompt |
 | `approve` | `set[str]` | `ApprovalGate(names)` |
-| `protected_paths` | `list[Path]` | `ProtectedPaths(paths)` |
 | `audit` | `bool` | `AuditLog()` |
 | `checkpointer` | `SessionStore \| None` | history saved after every message; resumed if `session_id` exists |
 | `workspace` | `Path \| None` | workspace file tools + the "save under workspace/" prompt line |
 | `compaction` | `Compactor \| None` | the compaction middleware (`Compactor(at_tokens=…, keep_last=…)`) |
 | `role`, `session_id`, `approvals` | | run context; `approvals` defaults to `AutoReject()` |
 
-Middleware order when several are installed: `RoleGate, ProtectedPaths, ApprovalGate, *user middleware, AuditLog, Compactor`.
+Middleware order when several are installed: `RoleGate, ApprovalGate, *user middleware, AuditLog, Compactor`. Path confinement lives in the workspace tools themselves (they refuse any path outside `workspace/`), not in a middleware.
 
 ### `@tool` decorator (in `tools.py`)
 
@@ -223,9 +222,10 @@ class Tool:
 class ToolError(Exception): ...
 class ToolRegistry:  add(tool), get(name), specs() -> list[ToolSpec], names() -> list[str], __contains__
 
-# Company tools (component="actions"):
-lookup_customer(name)                     case-insensitive substring on customers.json; exact match wins; returns pretty JSON; ToolError if none
-lookup_issue(query)                       by id, or substring on title / customer name; returns list
+# Company tools (component="actions") — they behave like a small CRM: a directory, then per-record lookups
+list_customers()                          one line per customer: "cust_acme: Acme Robotics (Growth)"; every role may call it
+lookup_customer(name)                     ≥ 2 chars; matches id OR name; one match → the full record (pretty JSON); several → ids and names only with "be more specific"; none → ToolError pointing at list_customers
+lookup_issue(query)                       non-empty; an exact issue id, else all issues of exactly one matching customer (id or name), else issues whose title contains all the words; ≤ 10 results; no "all open issues" shortcut (so "every customer" really costs one call per customer)
 get_revenue(period)                       "FY2026" | "FY2026-Q2" | "ARR"; returns the slice + the source note
 send_proposal(customer_id, to_email, subject, body_markdown)   requires_approval=True, read_only=False
                                           to_email must equal the customer's contact_email (ToolError "Unverified address: … is not the contact on record (…)")
@@ -260,17 +260,16 @@ class Middleware:                                    # base class; all methods d
     def tools(self) -> list[Tool]                                              # tools a middleware installs (TodoTracker → update_todos)
 
 class CallLimit(Middleware):          component="actions";  max_model_calls=8, max_tool_calls=10 (low on purpose so the 'Runaway loop' scenario trips it) → deny with a reason that names the limit; counts live in ctx.state["calls"]
-class TodoTracker(Middleware):        component="actions";  installs update_todos; emits Event("todo_update") when it changes
+class TodoTracker(Middleware):        component="actions";  installs update_todos; emits Event("todo_update") when it changes. Available but not installed by any stage (its effect was rarely visible in rehearsal); mentioned on the middleware slide as one more middleware you could add
 class RoleGate(Middleware):           component="boundaries"; ROLE_TOOLS below; deny if tool.component=="actions" company tool and name ∉ ROLE_TOOLS[ctx.role]; reason: "Role '{role}' is not allowed to use {tool}. Allowed: …"
-class ProtectedPaths(Middleware):     component="boundaries"; for tools with a `path` argument and read_only=False: deny unless resolved path is inside WORKSPACE_DIR; also deny any path whose resolved form is under COMPANY_DIR, SKILLS_DIR, REPO_ROOT/harness, REPO_ROOT/app
 class ApprovalGate(Middleware):       component="boundaries"; for tool.requires_approval → Decision("ask") (the loop then goes through approvals.py)
 class AuditLog(Middleware):           component="boundaries"; after_tool appends {ts, session_id, role, tool, args (truncated 300 chars), ok, decision} to AUDIT_LOG; emits Event("audit")
 class Compactor(Middleware):          component="persistence"; in before_model: if ctx.state.get("last_prompt_tokens",0) > settings.compact_at_tokens and len(messages) > keep_last+2 → summarize messages[1:-keep_last] with one extra LLM call ("Summarize this conversation for your future self: decisions, facts, open items, file paths…"), replace them with a single user message "[Conversation summary]\n…", emit Event("compaction", {before: n, after: m, summary_preview}); after_model stores usage.prompt_tokens into ctx.state["last_prompt_tokens"]
 
 ROLE_TOOLS = {
-  "sales":       {"lookup_customer", "send_proposal"},
-  "engineering": {"lookup_customer", "lookup_issue"},
-  "finance":     {"lookup_customer", "get_revenue"},
+  "sales":       {"list_customers", "lookup_customer", "send_proposal"},
+  "engineering": {"list_customers", "lookup_customer", "lookup_issue"},
+  "finance":     {"list_customers", "lookup_customer", "get_revenue"},
 }
 ```
 The chain runs middlewares in list order; the first `deny` wins; an `ask` wins over `allow`.
@@ -284,7 +283,7 @@ PROPOSAL_REVIEWER = SubagentDef(
     name="proposal-reviewer",
     description="Checks a drafted proposal against the customer record and flags commitments the record does not support. Use after drafting any proposal.",
     system_prompt="…read-only reviewer; call lookup_customer; return a checklist: Supported / Unsupported / Missing; be terse…",
-    tools=["lookup_customer"], model=None → settings.subagent_model)
+    tools=["lookup_customer", "read_workspace_file"], model=None → settings.subagent_model)   # the child gets only the tools the parent has registered (read_workspace_file exists from stage 4)
 def make_run_subagent_tool(defs: list[SubagentDef], registry: ToolRegistry, llm_factory) -> Tool
     # run_subagent(name, task): builds a child Agent (loop.py) with its own fresh message list, the subset of tools, CallLimit(6,8), no approvals;
     # child events are re-emitted on the parent ctx with event.subagent = name (so the UI nests them); returns the child's final text
@@ -357,14 +356,14 @@ Stages 0–3 use `store=None` (history lives in memory only, and is lost on rest
 
 ```python
 @dataclass
-class Scenario: title: str; role: str; prompt: str; watch: str          # watch = one sentence telling the audience what to look at
+class Scenario: title: str; role: str; prompt: str; watch: str; resume: bool = False   # watch = one sentence for the audience; resume=True means Run first resumes the most recent saved session of this stage (a new chat session resumed from SQLite), then sends the prompt
 
 def build_agent(stage: int, role: str, *, session_id: str | None = None, approvals: ApprovalBroker | None = None,
                 llm: LLM | None = None, store: SessionStore | None = None) -> Agent
     # stage 0: Agent(llm, "You are a helpful assistant.", empty registry, [], AutoReject, None)
-    # stage 1: + system prompt from context.build_system_prompt; registry += load_skill
-    # stage 2: + company tools; middlewares [CallLimit(), TodoTracker()]; registry += run_subagent([PROPOSAL_REVIEWER])
-    # stage 3: middlewares = [RoleGate(), ProtectedPaths(), ApprovalGate(), CallLimit(), TodoTracker(), AuditLog()]; approvals = given or AutoReject
+    # stage 1: + system prompt from context.build_system_prompt (AGENTS.md only, no skills)
+    # stage 2: + company tools; middlewares [CallLimit()]; skills index + load_skill; registry += run_subagent([PROPOSAL_REVIEWER])
+    # stage 3: middlewares = [RoleGate(), ApprovalGate(), CallLimit(), AuditLog()]; approvals = given or AutoReject
     # stage 4: registry += workspace tools; middlewares += [Compactor(llm)]; store = given or SessionStore(); session resumed if session_id exists in store
     # session_id default: uuid4 hex[:12]
 
@@ -382,17 +381,26 @@ def describe_stage(stage: int) -> dict           # {id, name, component, tagline
 
 ## Scenarios (also the talk's demo script)
 
+One story runs through the talk: the **Acme Robotics renewal**, with engineering and finance
+dropping in where their component shows best. Rules for every scenario: it needs only the
+component being introduced (never one from a later stage); its effect is visible on screen
+without narration; it finishes in under 40 s on Sonnet 5.5; where possible it repeats an
+earlier prompt so the audience sees a before/after. Prompts are shown verbatim on screen.
+
 | Stage | Title | Role | Prompt | Watch |
 |---|---|---|---|---|
-| 0 | Does it know us? | sales | What do you know about Kestrel Software and our proposal process? | The model guesses or admits it doesn't know. Nothing lights up but the model. |
-| 1 | Skill-guided draft | sales | Use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, 40 seats, they care about SSO and audit logs. | `load_skill` fires (Context node), and the draft follows the skill's sections. We still had to explain who Acme is. |
-| 2 | Look it up yourself | sales | Draft a proposal for Acme Robotics and have the proposal-reviewer check it before you show it to me. | `lookup_customer`, a todo list, then the subagent's nested review. |
-| 2 | Runaway loop | engineering | For every open issue, look up its customer, then look up every other issue for that customer, and keep going until you have checked everything twice. | `CallLimit` stops it. |
-| 3 | Wrong role | engineering | What was our revenue in FY2026? | `RoleGate` denies `get_revenue`; the model says so instead of guessing. |
+| 0 | Who's Acme? | sales | Who is Acme Robotics and when is their renewal due? | It can't know. Nothing is around the model. |
+| 0 | Price the renewal | sales | Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing. | It invents a price, or asks for one. It has no idea what our plans cost. |
+| 1 | Price the renewal, again | sales | *(same prompt as stage 0)* Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing. | Plan-table price ($2,400 per seat per year), our tone, our sections, no discount. Tokens in jumped: AGENTS.md rides on every call. We still had to say who Acme is. |
+| 1 | Can I discount? | sales | Can I offer Acme 15% off to close this quarter? | "No: above 10% needs written approval from finance", straight from AGENTS.md. A business rule, not a fact. |
+| 2 | Prepare the renewal | sales | Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the proposal-reviewer check it before you show it to me. | `load_skill` pulls the playbook, `lookup_customer` and `lookup_issue` pull the facts, the reviewer runs as a nested subagent. The model fetched what it needed. |
+| 2 | Account health, every customer | engineering | Give me an account health report for every customer: their record plus their open issues. | A realistic over-sized request. `CallLimit` denies the 11th tool call; the model reports partial results and says why. |
+| 3 | Wrong role | engineering | What was our revenue in FY2026? | `RoleGate` denies `get_revenue`, in code, before it runs; the model says so instead of guessing. |
 | 3 | Right role | finance | What was our revenue in FY2026? | Same question, allowed, answered with record ids. |
-| 3 | Needs a human | sales | Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and send it to procurement@acme-robotics.example with the subject "Kestrel Enterprise proposal". | Approval card appears and the loop waits; approve → outbox file + audit line. Variant with ceo@acme-robotics.example: the tool rejects the unverified address. |
-| 4 | Save it | sales | Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and save it as workspace/acme-proposal.md. Give me the path. | `write_workspace_file` (Persistence node); `checkpoint` events. Also show a write to `company/AGENTS.md` being blocked. |
-| 4 | Come back tomorrow | sales | *(resume the previous session)* What did we save earlier, and what was in it? | Resumed history answers without re-reading. Then trigger compaction on a long session and show the summary marker. |
+| 3 | Send it | sales | Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs) and send it to procurement@acme-robotics.example with the subject "Kestrel renewal proposal". | The approval card appears and the loop waits. Approve → outbox file + audit line. Variant: send to ceo@acme-robotics.example and the tool rejects the address as not on record. |
+| 4 | Save the draft | sales | Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs), save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the Acme draft is done. | `write_workspace_file` writes the draft and checkpoints tick up; the AGENTS.md write is refused by the tool (outside `workspace/`), and the model reports it. |
+| 4 | Pick up yesterday's work | sales (`resume=True`) | Where did we leave off with Acme, and what did we save? | Run resumes the most recent saved session from SQLite (the divider says so) and answers from history. In the sidebar the session is highlighted. |
+| 4 | Long day | sales | *(the **Compact now** button, no prompt)* | 9 → 7 messages, a compaction row with the summary. |
 
 ## Web app (`app/`) — the demo surface
 
@@ -495,13 +503,13 @@ that nothing but the model is there.
    Composer: input + **Stop** (red text, outlined) + send button; disabled while a run is in
    flight. Under it a facts line: `session <id> · N model calls · N tool calls · N blocked ·
    tokens in/out · audit.jsonl · n lines · outbox · n files` and the shortcut hint.
-4. **Drawer** (`/` key, the top-bar button, or the vertical `CODE · SCENARIOS` tab on the right
+4. **Sessions sidebar (stage 4 only)**: a 260px column to the LEFT of the chat window, surface card, kicker `SESSIONS · SQLITE`: a **New task** button, then the saved sessions newest first (first prompt as title, role, message count, time); the open session is highlighted (forest left rule); clicking one resumes it in place (a divider `RESUMED SESSION <id> FROM SQLITE` appears in the transcript, like after a server restart). It slides in with the chat when stage 4 opens, which is the moment the video showed. At stages 0–3 it is absent and the chat stays centered.
+   **Drawer** (`/` key, the top-bar button, or the vertical `CODE · SCENARIOS` tab on the right
    edge): slides in from the right (420px, surface, hairline), two tabs. **Code**: the stage's
    snippets as lime code blocks (13px) with the orange marks on new keywords. **Scenarios**: the
    stage's cards (title, role, prompt in quotes, "Watch:" line); **Run** sets the role, closes
    the drawer, fills the composer and sends; a running card gets an orange 2px border and a
-   pulsing numbered dot; a finished one a lime ✓. Stage 4 adds a **Sessions** section (list from
-   `/api/sessions` with Resume) and a **Compact now** button.
+   pulsing numbered dot; a finished one a lime ✓. Stage 4 adds a **Compact now** button (the sessions list lives in the sidebar). A scenario with `resume: true` renders a `Resumes the latest saved session` note on its card, and its **Run** first creates a new chat session with `resume_session_id` = the most recent saved session of this stage (from `/api/sessions`), shows the resume divider, then sends the prompt. A scenario whose prompt is empty ("Long day") renders its Run as **Compact now**.
 5. Transitions: stage change → Screen A with the progress segment filling and the component
    card ring pulsing; **Open the chat** → Screen B with the chat window rising 12px/300 ms;
    events → rows slide in 8px/250 ms. `prefers-reduced-motion` respected; nothing flashes faster
@@ -538,8 +546,8 @@ screen A, strip, transcript, approval, drawer, keyboard).
 ## Tests & verification (core agent)
 
 `tests/` run with `pytest -q`, no network, `FakeLLM` only:
-- tools: lookups, unverified email rejected, outbox write (tmp OUTBOX via monkeypatched settings), workspace path escape blocked
-- middleware: RoleGate deny/allow per role, ProtectedPaths, CallLimit, Compactor replaces the middle and keeps the last N, TodoTracker state
+- tools: lookups (list_customers directory; lookup_customer by id or name, one record or a disambiguation list), unverified email rejected, outbox write (tmp OUTBOX via monkeypatched settings), workspace path escape blocked (company/AGENTS.md and ../company/AGENTS.md both refused by the workspace tool)
+- middleware: RoleGate deny/allow per role, CallLimit, Compactor replaces the middle and keeps the last N, TodoTracker state (class only)
 - loop: FakeLLM script `[ToolCall lookup_customer] → "final text"` yields events in order `run_start, text_delta…, tool_call, decision(allow,silent), tool_result, usage, text_done, run_end`; a denied call produces `decision.deny` and a tool message starting "Blocked by harness"; an `ask` with an approver that returns False produces `approval_result{approved:false}`; an exhausted FakeLLM produces `error` then `run_end`
 - persistence: create/append/load round-trip; `build_agent(4, …, session_id=existing)` loads history; list_sessions newest first
 - stages: every stage × role builds; stage 0 has no tools; stage 3 registry includes `send_proposal` but RoleGate blocks it for engineering; `stage_snippet(s)` is non-empty for s in 0..4 and each snippet ≤ 40 lines; `scenarios(s)` roles are valid

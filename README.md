@@ -96,29 +96,35 @@ The web app's code panel shows that call, cut from the running source.
 | Stage | Component | New `Agent(...)` keywords | What it adds |
 |---|---|---|---|
 | 0 Chatbot | model | `model` | A system prompt, a message list, one streamed model call. No tools, no memory. |
-| 1 Context | context | `instructions`, `skills` | `company/AGENTS.md` as the always-on prompt; skills listed by name and loaded on demand with `load_skill`. |
-| 2 Actions | actions | `tools`, `middleware`, `subagents` | Four company tools (`@tool`), the agent loop, `CallLimit` and `TodoTracker` middleware, a `proposal-reviewer` subagent. |
-| 3 Boundaries | boundaries | `permissions`, `approve`, `protected_paths`, `audit` | `RoleGate` per role, protected paths, human approval for `send_proposal`, an audit log. Enforced in code, not in the prompt. |
-| 4 Persistence | persistence | `checkpointer`, `workspace`, `compaction` | SQLite checkpoints with resume, a writable `workspace/` with file tools, a `Compactor` that summarizes old turns. |
+| 1 Context | context | `instructions` | `company/AGENTS.md` as the always-on system prompt: company facts, plans and prices, business rules. Nothing else: no tool, no loop; the request is identical to stage 0 except the system prompt. |
+| 2 Actions | actions | `tools`, `middleware`, `skills`, `subagents` | Five company tools (`@tool`: `list_customers`, `lookup_customer`, `lookup_issue`, `get_revenue`, `send_proposal`) and the agent loop; skills on demand (listed by name in the prompt, body pulled with `load_skill`: context the model *pulls* instead of context we *push*); `CallLimit` middleware; a `proposal-reviewer` subagent. |
+| 3 Boundaries | boundaries | `permissions`, `approve`, `audit` | `RoleGate` per role, human approval for `send_proposal`, an audit log. Enforced in code, not in the prompt. Chain: `RoleGate, ApprovalGate, CallLimit, AuditLog`. |
+| 4 Persistence | persistence | `checkpointer`, `workspace`, `compaction` | SQLite checkpoints with a sessions sidebar (list, resume, new task), a writable `workspace/` whose file tools refuse any path outside it, a `Compactor` that summarizes old turns. |
 
-Roles: **sales** may use `lookup_customer`, `send_proposal`; **engineering** `lookup_customer`,
-`lookup_issue`; **finance** `lookup_customer`, `get_revenue` (`ROLE_TOOLS` in `harness/middleware.py`).
+Roles: every role may use `list_customers` and `lookup_customer`; on top of that **sales** may use
+`send_proposal`, **engineering** `lookup_issue`, **finance** `get_revenue` (`ROLE_TOOLS` in `harness/middleware.py`).
+Roles only matter from stage 3, when `permissions=ROLE_TOOLS` installs `RoleGate`.
 
 ## Scenarios (the demo script)
 
-Each is a **Run** button in the web app's Scenarios drawer.
+One story runs through the talk: the **Acme Robotics renewal**. Each scenario is a **Run** button
+in the web app's Scenarios drawer, needs only the component being introduced, and repeats an
+earlier prompt where a before/after helps.
 
 | Stage | Title | Role | Prompt | Watch |
 |---|---|---|---|---|
-| 0 | Does it know us? | sales | What do you know about Kestrel Software and our proposal process? | The model guesses or admits it doesn't know. Nothing lights up but the model. |
-| 1 | Skill-guided draft | sales | Use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, 40 seats, they care about SSO and audit logs. | `load_skill` fires (Context), and the draft follows the skill's sections. We still had to explain who Acme is. |
-| 2 | Look it up yourself | sales | Draft a proposal for Acme Robotics and have the proposal-reviewer check it before you show it to me. | `lookup_customer`, a todo list, then the subagent's nested review. |
-| 2 | Runaway loop | engineering | For every open issue, look up its customer, then look up every other issue for that customer, and keep going until you have checked everything twice. | `CallLimit` stops it. |
-| 3 | Wrong role | engineering | What was our revenue in FY2026? | `RoleGate` denies `get_revenue`; the model says so instead of guessing. |
+| 0 | Who's Acme? | sales | Who is Acme Robotics and when is their renewal due? | It can't know. Nothing is around the model. |
+| 0 | Price the renewal | sales | Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing. | It invents a price, or asks for one. It has no idea what our plans cost. |
+| 1 | Price the renewal, again | sales | *(same prompt as stage 0)* Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing. | Plan-table price ($2,400 per seat per year), our tone, our sections, no discount. Tokens in jumped: AGENTS.md rides on every call. We still had to say who Acme is. |
+| 1 | Can I discount? | sales | Can I offer Acme 15% off to close this quarter? | "No: above 10% needs written approval from finance", straight from AGENTS.md. A business rule, not a fact. |
+| 2 | Prepare the renewal | sales | Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the proposal-reviewer check it before you show it to me. | `load_skill` pulls the playbook, `lookup_customer` and `lookup_issue` pull the facts, the reviewer runs as a nested subagent. The model fetched what it needed. |
+| 2 | Account health, every customer | engineering | Give me an account health report for every customer: their record plus their open issues. | A realistic over-sized request. `CallLimit` denies the 11th tool call; the model reports partial results and says why. |
+| 3 | Wrong role | engineering | What was our revenue in FY2026? | `RoleGate` denies `get_revenue`, in code, before it runs; the model says so instead of guessing. |
 | 3 | Right role | finance | What was our revenue in FY2026? | Same question, allowed, answered with record ids. |
-| 3 | Needs a human | sales | Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and send it to procurement@acme-robotics.example with the subject "Kestrel Enterprise proposal". | The approval card appears and the loop waits; approve → outbox file and an audit line. Variant: send to ceo@acme-robotics.example and the tool rejects the unverified address. |
-| 4 | Save it | sales | Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and save it as workspace/acme-proposal.md. Give me the path. | `write_workspace_file` (Persistence); `checkpoint` events. Also show a write to `company/AGENTS.md` being blocked. |
-| 4 | Come back tomorrow | sales | *(resume the previous session)* What did we save earlier, and what was in it? | Resumed history answers without re-reading. Then trigger compaction on a long session and show the summary marker. |
+| 3 | Send it | sales | Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs) and send it to procurement@acme-robotics.example with the subject "Kestrel renewal proposal". | The approval card appears and the loop waits. Approve → outbox file + audit line. Variant: send to ceo@acme-robotics.example and the tool rejects the address as not on record. |
+| 4 | Save the draft | sales | Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs), save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the Acme draft is done. | `write_workspace_file` writes the draft and checkpoints tick up; the AGENTS.md write is refused by the tool (outside `workspace/`), and the model reports it. |
+| 4 | Pick up yesterday's work | sales (`resume=True`) | Where did we leave off with Acme, and what did we save? | Run resumes the most recent saved session from SQLite (the divider says so) and answers from history. In the sidebar the session is highlighted. |
+| 4 | Long day | sales | *(the **Compact now** button, no prompt)* | 9 → 7 messages, a compaction row with the summary. |
 
 ## Talk-day checklist
 
@@ -126,7 +132,7 @@ The day before
 - [ ] On the talk laptop: `pip install -r requirements.txt` (do this on the org network, not at the venue).
 - [ ] Edit `.env` for the internal endpoint (section above). Confirm `LLM_MODEL` and `LLM_SUBAGENT_MODEL` exist there.
 - [ ] `python scripts\verify_offline.py` → every line PASS.
-- [ ] `python scripts\live_smoke.py` → runs all nine scenarios against the real endpoint and prints PASS/FAIL for what the audience should see (costs real tokens; `live_smoke.py 3` runs one stage).
+- [ ] `python scripts\live_smoke.py` → runs every prompt scenario against the real endpoint ("Long day" is a UI button and is skipped; "Pick up yesterday's work" resumes the "Save the draft" session) and prints PASS/FAIL for what the audience should see (costs real tokens; `live_smoke.py 3` runs one stage).
 - [ ] Rehearse every scenario once in the web app. Rehearse once in mock mode too.
 
 One hour before
@@ -136,8 +142,8 @@ One hour before
 - [ ] Close anything that shows `.env`. The key is never printed by the app.
 
 During the talk
-- [ ] Stage 4 "Come back tomorrow": to make the point, reload the page (or restart the server) after "Save it", then use the Sessions list in the drawer (or `--session <id>` in the terminal) to resume the "Save it" session before running the scenario. Without a reload it simply continues the open session, which also works.
-- [ ] Compaction triggers at `KESTREL_COMPACT_AT_TOKENS` (6000 by default); the **Compact now** button forces it.
+- [ ] Stage 4 "Pick up yesterday's work": run it after "Save the draft". Its **Run** resumes the most recent saved stage-4 session from SQLite (a `RESUMED SESSION … FROM SQLITE` divider appears) and then asks where we left off. To make the point harder, reload the page or restart the server first; or click the "Save the draft" session in the Sessions sidebar to resume it by hand (`--session <id>` in the terminal).
+- [ ] Stage 4 "Long day": its Run is the **Compact now** button (no prompt); it forces the `Compactor` on the open session. Compaction also triggers by itself at `KESTREL_COMPACT_AT_TOKENS` (6000 by default).
 
 If the endpoint is down: stop the server, `$env:KESTREL_MOCK = "1"`, start it again. The demo
 script runs unchanged on scripted events.

@@ -6,10 +6,8 @@ import pytest
 
 from harness import config
 from harness.llm import FakeLLM, ToolCall, Usage
-from harness.middleware import (ApprovalGate, AuditLog, CallLimit, Compactor, ProtectedPaths, RoleGate,
-                                TodoTracker)
-from harness.tools import (get_revenue, lookup_customer, lookup_issue, read_workspace_file, send_proposal,
-                           update_todos, write_workspace_file)
+from harness.middleware import ApprovalGate, AuditLog, CallLimit, Compactor, RoleGate, TodoTracker
+from harness.tools import get_revenue, list_customers, lookup_customer, lookup_issue, send_proposal, update_todos
 
 
 def call(name: str, **args) -> ToolCall:
@@ -22,6 +20,8 @@ def call(name: str, **args) -> ToolCall:
     ("engineering", lookup_issue, "allow"), ("engineering", get_revenue, "deny"),
     ("engineering", send_proposal, "deny"), ("finance", get_revenue, "allow"),
     ("finance", send_proposal, "deny"), ("finance", lookup_customer, "allow"),
+    ("sales", list_customers, "allow"), ("engineering", list_customers, "allow"),
+    ("finance", list_customers, "allow"),
 ])
 async def test_role_gate(ctx, role, tool, expected):
     ctx.role = role
@@ -35,25 +35,6 @@ async def test_role_gate(ctx, role, tool, expected):
 async def test_role_gate_ignores_non_company_tools(ctx):
     ctx.role = "engineering"
     assert (await RoleGate().before_tool(call("update_todos"), update_todos, ctx)).action == "allow"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("path,expected", [
-    ("acme-proposal.md", "allow"), ("workspace/acme-proposal.md", "allow"),
-    ("company/AGENTS.md", "deny"), ("../company/AGENTS.md", "deny"), ("skills/x/SKILL.md", "deny"),
-    ("harness/loop.py", "deny"), ("../outside.md", "deny"),
-])
-async def test_protected_paths(ctx, tmp_state, path, expected):
-    decision = await ProtectedPaths().before_tool(call("write_workspace_file", path=path, content="x"),
-                                                  write_workspace_file, ctx)
-    assert decision.action == expected, decision.reason
-
-
-@pytest.mark.asyncio
-async def test_protected_paths_skips_read_only_tools(ctx, tmp_state):
-    decision = await ProtectedPaths().before_tool(call("read_workspace_file", path="../x"),
-                                                  read_workspace_file, ctx)
-    assert decision.action == "allow"
 
 
 @pytest.mark.asyncio

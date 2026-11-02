@@ -31,6 +31,51 @@ def test_stage0_has_no_tools(tmp_state):
     assert len(make(0, "sales").tools) == 0
 
 
+def test_stage1_is_stage0_plus_a_system_prompt(tmp_state):
+    """Stage 1 adds only context: no tools, no loop, no skills index, no middleware."""
+    s0, s1 = make(0, "sales"), make(1, "sales")
+    assert len(s1.tools) == 0 and s1.middlewares == [] == s0.middlewares
+    assert "Kestrel" in s1.system_prompt and s1.system_prompt != s0.system_prompt
+    assert "Available skills (load with load_skill)" not in s1.system_prompt
+    assert "load_skill" not in s1.system_prompt and "- proposal-writing:" not in s1.system_prompt
+    assert "Acme" not in s1.system_prompt  # it still has to be told who Acme is
+
+
+@pytest.mark.asyncio
+async def test_stage1_request_matches_stage0_except_the_system_prompt(tmp_state):
+    calls = []
+    for stage in (0, 1):
+        llm = FakeLLM(["hi"])
+        await collect(build_agent(stage, "sales", llm=llm), "Who is Acme Robotics?")
+        calls.append(llm.calls)
+    (c0,), (c1,) = calls
+    assert c0["messages"][1:] == c1["messages"][1:]
+    assert c0["messages"][0]["role"] == c1["messages"][0]["role"] == "system"
+    assert not c0["tools"] and not c1["tools"]
+
+
+def test_stage2_adds_tools_skills_and_subagent(tmp_state):
+    agent = make(2, "sales")
+    names = set(agent.tools.names())
+    assert {"load_skill", "list_customers", "lookup_customer", "lookup_issue", "get_revenue",
+            "send_proposal", "run_subagent"} == names
+    assert "Available skills (load with load_skill)" in agent.system_prompt
+    assert "- proposal-writing:" in agent.system_prompt
+    assert [type(m).__name__ for m in agent.middlewares] == ["CallLimit"]
+
+
+def test_stage3_middleware_chain(tmp_state):
+    assert [type(m).__name__ for m in make(3, "sales").middlewares] == [
+        "RoleGate", "ApprovalGate", "CallLimit", "AuditLog"]
+
+
+def test_stage4_scenarios_include_resume_and_compact():
+    scs = scenarios(4)
+    assert [sc.resume for sc in scs].count(True) == 1
+    assert [sc.prompt for sc in scs].count("") == 1
+    assert all(not sc.resume for s in range(4) for sc in scenarios(s))
+
+
 def test_tools_unlock_cumulatively(tmp_state):
     seen: set[str] = set()
     for stage in ALL_STAGES:
@@ -76,7 +121,8 @@ def test_new_keywords_appear_in_snippet(stage):
 def test_scenarios_and_description(stage):
     assert scenarios(stage)
     for sc in scenarios(stage):
-        assert sc.role in ROLES and sc.prompt and sc.watch
+        assert sc.role in ROLES and sc.title and sc.watch
+        assert sc.prompt or stage == 4  # only the "Long day" button has no prompt
     info = describe_stage(stage)
     assert set(info) == {"id", "name", "component", "tagline", "headline", "problem", "bullets",
                          "unlocked_tools", "middlewares", "subagents", "new_keywords"}

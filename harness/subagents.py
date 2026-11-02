@@ -32,10 +32,11 @@ PROPOSAL_REVIEWER = SubagentDef(
     name="proposal-reviewer",
     description="Checks a drafted proposal against the customer record and flags commitments "
                 "the record does not support. Use after drafting any proposal.",
-    system_prompt="You are a read-only proposal reviewer at Kestrel Software. Call lookup_customer "
-                  "for the customer in the draft, then return a terse checklist with three headings: "
+    system_prompt="You are a read-only proposal reviewer at Kestrel Software. If the task names a "
+                  "saved draft and you have read_workspace_file, read it. Call lookup_customer for "
+                  "the customer in the draft, then return a terse checklist with three headings: "
                   "Supported, Unsupported, Missing. Cite the customer id. Do not rewrite the proposal.",
-    tools=["lookup_customer"],
+    tools=["lookup_customer", "read_workspace_file"],  # only those the parent has are given
 )
 # [/stage:2]
 
@@ -57,6 +58,7 @@ def make_run_subagent_tool(defs: list[SubagentDef], registry: ToolRegistry,
             raise ToolError(f"Unknown subagent '{name}'. Available: {', '.join(by_name)}")
         child = Agent(model=llm_factory(sub.model or settings.subagent_model),
                       instructions=sub.system_prompt,
+                      # Only tools the parent actually has: no workspace before stage 4, silently.
                       tools=[registry.get(t) for t in sub.tools if t in registry],
                       middleware=child_middleware() if child_middleware else [],
                       role=ctx.role, stage=ctx.stage, session_id=f"{ctx.session_id}:{name}")

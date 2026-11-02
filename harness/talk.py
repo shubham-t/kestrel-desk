@@ -17,51 +17,63 @@ from .config import REPO_ROOT, STAGES
 class Scenario:
     title: str
     role: str
-    prompt: str
+    prompt: str  # empty = a UI action instead of a prompt ("Long day" is the Compact now button)
     watch: str  # one sentence telling the audience what to look at
+    resume: bool = False  # Run first resumes the most recent saved session of this stage, then sends
 
+
+# One story runs through the talk: the Acme Robotics renewal. Each scenario needs only the
+# component being introduced, and repeats an earlier prompt where a before/after helps.
+_PRICE_THE_RENEWAL = ("Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, "
+                      "with pricing.")
+_SHORT_PROPOSAL = ("Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and "
+                   "audit logs)")
+_REVENUE_QUESTION = "What was our revenue in FY2026?"
 
 _SCENARIOS: dict[int, list[Scenario]] = {
-    0: [Scenario("Does it know us?", "sales",
-                 "What do you know about Kestrel Software and our proposal process?",
-                 "The model guesses or admits it doesn't know. Nothing lights up but the model.")],
-    1: [Scenario("Skill-guided draft", "sales",
-                 "Use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, "
-                 "40 seats, they care about SSO and audit logs.",
-                 "load_skill fires (Context node), and the draft follows the skill's sections. "
-                 "We still had to explain who Acme is.")],
-    2: [Scenario("Look it up yourself", "sales",
-                 "Draft a proposal for Acme Robotics and have the proposal-reviewer check it before you "
-                 "show it to me.",
-                 "lookup_customer, a todo list, then the subagent's nested review."),
-        Scenario("Runaway loop", "engineering",
-                 "For every open issue, look up its customer, then look up every other issue for that "
-                 "customer, and keep going until you have checked everything twice.",
-                 "CallLimit stops it.")],
-    3: [Scenario("Wrong role", "engineering", "What was our revenue in FY2026?",
-                 "RoleGate denies get_revenue; the model says so instead of guessing."),
-        Scenario("Right role", "finance", "What was our revenue in FY2026?",
+    0: [Scenario("Who's Acme?", "sales", "Who is Acme Robotics and when is their renewal due?",
+                 "It can't know. Nothing is around the model."),
+        Scenario("Price the renewal", "sales", _PRICE_THE_RENEWAL,
+                 "It invents a price, or asks for one. It has no idea what our plans cost.")],
+    1: [Scenario("Price the renewal, again", "sales", _PRICE_THE_RENEWAL,
+                 "Plan-table price ($2,400 per seat per year), our tone, our sections, no discount. "
+                 "Tokens in jumped: AGENTS.md rides on every call. We still had to say who Acme is."),
+        Scenario("Can I discount?", "sales", "Can I offer Acme 15% off to close this quarter?",
+                 "\"No: above 10% needs written approval from finance\", straight from AGENTS.md. "
+                 "A business rule, not a fact.")],
+    2: [Scenario("Prepare the renewal", "sales",
+                 "Prepare Acme Robotics' renewal proposal: check their record and open issues, then have "
+                 "the proposal-reviewer check it before you show it to me.",
+                 "load_skill pulls the playbook, lookup_customer and lookup_issue pull the facts, the "
+                 "reviewer runs as a nested subagent. The model fetched what it needed."),
+        Scenario("Account health, every customer", "engineering",
+                 "Give me an account health report for every customer: their record plus their open issues.",
+                 "A realistic over-sized request. CallLimit denies the 11th tool call; the model reports "
+                 "partial results and says why.")],
+    3: [Scenario("Wrong role", "engineering", _REVENUE_QUESTION,
+                 "RoleGate denies get_revenue, in code, before it runs; the model says so instead of guessing."),
+        Scenario("Right role", "finance", _REVENUE_QUESTION,
                  "Same question, allowed, answered with record ids."),
-        Scenario("Needs a human", "sales",
-                 "Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and "
-                 'send it to procurement@acme-robotics.example with the subject '
-                 '"Kestrel Enterprise proposal".',
-                 "The approval card appears and the loop waits. Approve -> an outbox file and an audit "
-                 "line. Try the same with ceo@acme-robotics.example: the tool rejects the unverified "
-                 "address.")],
-    4: [Scenario("Save it", "sales",
-                 "Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and "
-                 "save it as workspace/acme-proposal.md. Give me the path.",
-                 "write_workspace_file (Persistence node); checkpoint events. Also show a write to "
-                 "company/AGENTS.md being blocked."),
-        Scenario("Come back tomorrow", "sales", "What did we save earlier, and what was in it?",
-                 "Resume the previous session first: resumed history answers without re-reading. Then "
-                 "trigger compaction on a long session and show the summary marker.")],
+        Scenario("Send it", "sales",
+                 f"{_SHORT_PROPOSAL} and send it to procurement@acme-robotics.example with the subject "
+                 "\"Kestrel renewal proposal\".",
+                 "The approval card appears and the loop waits. Approve → outbox file + audit line. "
+                 "Variant: send to ceo@acme-robotics.example and the tool rejects the address as not on record.")],
+    4: [Scenario("Save the draft", "sales",
+                 f"{_SHORT_PROPOSAL}, save it as workspace/acme-renewal.md, and add a line to "
+                 "company/AGENTS.md saying the Acme draft is done.",
+                 "write_workspace_file writes the draft and checkpoints tick up; the AGENTS.md write is "
+                 "refused by the tool (outside workspace/), and the model reports it."),
+        Scenario("Pick up yesterday's work", "sales", "Where did we leave off with Acme, and what did we save?",
+                 "Run resumes the most recent saved session from SQLite (the divider says so) and answers "
+                 "from history. In the sidebar the session is highlighted.", resume=True),
+        Scenario("Long day", "sales", "",
+                 "9 → 7 messages, a compaction row with the summary.")],
 }
 
 # unlocked_tools: tools that first appear at this stage.
 # middlewares / subagents: everything the stage's agent has installed, in chain order.
-_S3_CHAIN = ["RoleGate", "ProtectedPaths", "ApprovalGate", "CallLimit", "TodoTracker", "AuditLog"]
+_S3_CHAIN = ["RoleGate", "ApprovalGate", "CallLimit", "AuditLog"]
 _DETAILS: dict[int, dict] = {
     0: dict(
         headline="Just a model and a prompt",
@@ -74,27 +86,29 @@ _DETAILS: dict[int, dict] = {
         unlocked_tools=[], middlewares=[], subagents=[], new_keywords=["model"]),
     1: dict(
         headline="Tell it who we are",
-        problem="The model knows nothing about Kestrel, so every answer about us is a guess. "
-                "Pasting every playbook into every prompt would bloat it and go stale. "
-                "It needs standing instructions, plus know-how it pulls in only when a task calls for it.",
-        bullets=["company/AGENTS.md is the always-on system prompt",
-                 "Skills are listed by name and description only",
-                 "load_skill pulls a skill's full text on demand"],
-        unlocked_tools=["load_skill"], middlewares=[], subagents=[],
-        new_keywords=["instructions", "skills"]),
+        problem="The model knows nothing about Kestrel, so it invents our prices and our rules. "
+                "AGENTS.md is the always-on company file: who we are, our plans and prices, and the "
+                "business rules every answer must follow. It rides in the system prompt of every call; "
+                "nothing else about the call changes.",
+        bullets=["company/AGENTS.md becomes the system prompt",
+                 "Facts: the company, plans and list prices",
+                 "Rules: discounts, tone, what we never promise",
+                 "Same single call as stage 0: no tools, no loop"],
+        unlocked_tools=[], middlewares=[], subagents=[], new_keywords=["instructions"]),
     2: dict(
         headline="Let it look things up itself",
-        problem="With context alone, the model still can't see our records, so we had to tell it who Acme is. "
-                "It needs tools to fetch facts, a loop that keeps going until the job is done, and a second "
-                "pair of eyes on its draft. A loop also needs a brake, or one bad request runs forever.",
-        bullets=["Four company tools declared with @tool",
-                 "The agent loop: model -> tools -> results -> model",
-                 "Middleware: CallLimit budgets, TodoTracker plans",
+        problem="AGENTS.md can't hold every customer record or every playbook, so we still had to tell it "
+                "who Acme is. Now the model has to fetch facts and know-how itself: tools for our records, "
+                "skills it loads only when a task needs them, a reviewer for its draft. A loop that keeps "
+                "calling tools also needs a brake.",
+        bullets=["Five company tools declared with @tool, run in a loop",
+                 "Skills listed by name; load_skill pulls one in on demand",
+                 "CallLimit middleware: a budget on every run",
                  "A proposal-reviewer subagent with its own context"],
-        unlocked_tools=["lookup_customer", "lookup_issue", "get_revenue", "send_proposal",
-                        "update_todos", "run_subagent"],
-        middlewares=["CallLimit", "TodoTracker"], subagents=["proposal-reviewer"],
-        new_keywords=["tools", "middleware", "subagents"]),
+        unlocked_tools=["load_skill", "list_customers", "lookup_customer", "lookup_issue", "get_revenue", "send_proposal",
+                        "run_subagent"],
+        middlewares=["CallLimit"], subagents=["proposal-reviewer"],
+        new_keywords=["tools", "middleware", "skills", "subagents"]),
     3: dict(
         headline="Draw the lines in code",
         problem="Now the agent can act, and it treats every user the same. An engineer can pull revenue, "
@@ -102,11 +116,11 @@ _DETAILS: dict[int, dict] = {
                 "Permissions, approvals and an audit trail have to live in the harness, where the model "
                 "can't talk its way past them.",
         bullets=["RoleGate: each role gets only its tools",
-                 "ProtectedPaths: company files and code are never writable",
                  "send_proposal pauses for a human's approval",
+                 "The tool itself rejects addresses not on record",
                  "Every tool call is written to an audit log"],
         unlocked_tools=[], middlewares=_S3_CHAIN, subagents=["proposal-reviewer"],
-        new_keywords=["permissions", "approve", "protected_paths", "audit"]),
+        new_keywords=["permissions", "approve", "audit"]),
     4: dict(
         headline="Remember, save, and keep going",
         problem="Everything so far lives in memory: restart the server and the conversation is gone, and "

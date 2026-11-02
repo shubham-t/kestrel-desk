@@ -86,9 +86,9 @@ class StageInfo:
 
 STAGES = [
     StageInfo(0, "Chatbot", "model", "A system prompt, a message list, one model call."),
-    StageInfo(1, "Context", "context", "Company instructions always on; skills loaded on demand."),
-    StageInfo(2, "Actions", "actions", "Tools, the agent loop, middleware and a subagent."),
-    StageInfo(3, "Boundaries", "boundaries", "Role permissions, protected paths, human approval, audit log."),
+    StageInfo(1, "Context", "context", "The company file, always on: facts, prices and rules."),
+    StageInfo(2, "Actions", "actions", "Tools, the agent loop, middleware, skills on demand and a subagent."),
+    StageInfo(3, "Boundaries", "boundaries", "Role permissions, human approval, audit log."),
     StageInfo(4, "Persistence", "persistence", "Checkpoints, a writable workspace, context compaction."),
 ]
 

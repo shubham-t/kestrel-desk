@@ -35,36 +35,61 @@ def _pretty(value) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False)
 
 
+def _match_customers(query: str) -> list[dict]:
+    """An exact id or name wins; otherwise a substring of the id or the name."""
+    q = query.strip().lower()
+    customers = _customers()
+    exact = [c for c in customers if q in (c["id"].lower(), c["name"].lower())]
+    return exact or [c for c in customers if q in c["id"].lower() or q in c["name"].lower()]
+
+
+MAX_ISSUES = 10
+
+
+@tool(component="actions")
+async def list_customers(ctx: RunContext) -> str:
+    """List every Kestrel customer: id, name and plan, one per line. Use lookup_customer for a full record."""
+    return "\n".join(f"{c['id']}: {c['name']} ({c['plan']})" for c in _customers())
+
+
 # [stage:2] A tool is a typed, documented function
 @tool(component="actions")
 async def lookup_customer(name: str, ctx: RunContext) -> str:
-    """Look up a Kestrel customer by (partial) company name.
-    Returns the customer record: plan, seats, ARR, contact, renewal date and notes."""
-    query = name.strip().lower()
-    customers = _customers()
-    exact = [c for c in customers if c["name"].lower() == query]
-    matches = exact or [c for c in customers if query in c["name"].lower()]
+    """Get ONE customer's full record by id (cust_acme) or company name (partial is fine):
+    plan, seats, ARR, contact, renewal date and notes."""
+    if len(name.strip()) < 2:
+        raise ToolError("Give at least 2 characters of a customer id or name.")
+    matches = _match_customers(name)
     if not matches:
-        raise ToolError(f"No customer matches '{name}'. Known: {', '.join(c['name'] for c in customers)}")
-    return _pretty(matches[0] if len(matches) == 1 else matches)
+        raise ToolError(f"No customer matches '{name}'. list_customers shows every customer.")
+    if len(matches) > 1:  # like a real CRM: a vague query gets a pick-list, never every record
+        picks = "\n".join(f"- {c['id']}: {c['name']}" for c in matches)
+        return f"{len(matches)} customers match '{name}'; be more specific:\n{picks}"
+    return _pretty(matches[0])
 # [/stage:2]
 
 
 @tool(component="actions")
 async def lookup_issue(query: str, ctx: RunContext) -> str:
-    """Find customer issues by issue id (e.g. ISS-1043), or by text in the title or customer name.
-    Use "open" to list every issue that is not resolved."""
+    """Find customer issues by issue id (ISS-1043), by ONE customer's id or name, or by words
+    from an issue title. Returns at most 10 issues with their status and severity."""
     q = query.strip().lower()
+    if not q:
+        raise ToolError("Give an issue id, a customer id or name, or words from an issue title.")
     names = {c["id"]: c["name"] for c in _customers()}
     issues = _load("issues.json")
-    if q == "open":
-        hits = [i for i in issues if i["status"] != "resolved"]
-    else:
-        hits = [i for i in issues if i["id"].lower() == q] or [
-            i for i in issues if q in i["title"].lower() or q in names.get(i["customer_id"], "").lower()]
+    customers = _match_customers(q) if len(q) >= 2 else []
+    hits = [i for i in issues if i["id"].lower() == q]
+    if not hits and len(customers) == 1:  # one customer's issues
+        c = customers[0]
+        hits = [i for i in issues if i["customer_id"] == c["id"]]
+        if not hits:
+            return f"No issues on record for {c['name']} ({c['id']})."
+    if not hits:  # words from a title
+        hits = [i for i in issues if all(w in i["title"].lower() for w in q.split())]
     if not hits:
         raise ToolError(f"No issues match '{query}'.")
-    return _pretty([{**i, "customer_name": names.get(i["customer_id"], "?")} for i in hits])
+    return _pretty([{**i, "customer_name": names.get(i["customer_id"], "?")} for i in hits[:MAX_ISSUES]])
 
 
 @tool(component="actions")
@@ -102,4 +127,4 @@ async def send_proposal(customer_id: str, to_email: str, subject: str, body_mark
 # [/stage:3]
 
 
-COMPANY_TOOLS = [lookup_customer, lookup_issue, get_revenue, send_proposal]
+COMPANY_TOOLS = [list_customers, lookup_customer, lookup_issue, get_revenue, send_proposal]

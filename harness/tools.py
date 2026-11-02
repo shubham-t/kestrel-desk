@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 
 from .context import make_load_skill_tool
 from .tooling import Tool, ToolError, ToolRegistry, schema_for, tool
-from .tools_company import COMPANY_TOOLS, get_revenue, lookup_customer, lookup_issue, send_proposal
+from .tools_company import (COMPANY_TOOLS, get_revenue, list_customers, lookup_customer, lookup_issue,
+                            send_proposal)
 from .tools_workspace import (WORKSPACE_TOOLS, list_workspace_files, read_workspace_file,
                               workspace_target, write_workspace_file)
 
@@ -45,7 +46,7 @@ update_todos.parameters["properties"]["items"]["items"] = TODO_SCHEMA
 
 __all__ = [
     "Tool", "ToolError", "ToolRegistry", "tool", "schema_for", "TodoItem",
-    "COMPANY_TOOLS", "WORKSPACE_TOOLS", "lookup_customer", "lookup_issue", "get_revenue",
+    "COMPANY_TOOLS", "WORKSPACE_TOOLS", "list_customers", "lookup_customer", "lookup_issue", "get_revenue",
     "send_proposal", "write_workspace_file", "read_workspace_file", "list_workspace_files",
     "workspace_target", "make_load_skill_tool", "update_todos",
 ]

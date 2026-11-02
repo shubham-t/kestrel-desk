@@ -67,6 +67,14 @@
       <div class="strip" id="strip"></div>
       <div class="strip-note" id="stripNote" hidden></div>
     </div>
+    <aside class="sessions" id="sessions" aria-label="Saved sessions" hidden>
+      <div class="sessions-head">
+        <div class="row"><span class="kicker">SESSIONS · SQLITE</span><span class="sess-count" id="sessCount"></span></div>
+        <button class="btn new" id="newTaskBtn" type="button">+ New task</button>
+      </div>
+      <ul class="sess-list" id="sessList"></ul>
+      <div class="sessions-foot">Checkpointed after every message to <code>kestrel.sqlite</code>. Click a session to resume it.</div>
+    </aside>
     <section class="chatwin" id="chatwin">
       <header class="chat-head">
         <span class="avatar" id="headAvatar" aria-hidden="true">k</span>

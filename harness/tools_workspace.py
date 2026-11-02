@@ -1,7 +1,7 @@
 """Workspace tools: the one folder the agent may write into.
 
-The tools enforce the boundary themselves (defense in depth); the ProtectedPaths
-middleware enforces it again before the tool ever runs.
+The tools enforce the boundary themselves: every path is resolved and must stay inside
+workspace/, so company files, skills and harness code are never writable.
 """
 from __future__ import annotations
 
@@ -16,10 +16,17 @@ if TYPE_CHECKING:
 
 
 def workspace_target(raw: str) -> Path:
-    """Where a model-supplied path lands: relative to workspace/ (a leading 'workspace/' is accepted)."""
+    """Where a model-supplied path lands: relative to workspace/ (a leading 'workspace/' is accepted).
+
+    A path that starts with a folder or file of the repo itself ("company/AGENTS.md", "harness/…")
+    means that real location, which is outside workspace/ and so gets refused; it is never
+    quietly redirected into a look-alike copy under workspace/.
+    """
     rel = Path(raw.strip().replace("\\", "/"))
     if rel.parts[:1] == ("workspace",):
         rel = Path(*rel.parts[1:]) if len(rel.parts) > 1 else Path(".")
+    elif rel.parts and (config.REPO_ROOT / rel.parts[0]).exists():
+        return (config.REPO_ROOT / rel).resolve()
     return (config.WORKSPACE_DIR / rel).resolve()
 
 

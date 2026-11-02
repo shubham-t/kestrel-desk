@@ -28,56 +28,60 @@ HARNESS_STAGES: list[dict] = [{'id': 0,
  {'id': 1,
   'name': 'Context',
   'component': 'context',
-  'tagline': 'Company instructions always on; skills loaded on demand.',
+  'tagline': 'The company file, always on: facts, prices and rules.',
   'headline': 'Tell it who we are',
-  'problem': 'The model knows nothing about Kestrel, so every answer about us is a guess. Pasting every '
-             'playbook into every prompt would bloat it and go stale. It needs standing instructions, plus '
-             'know-how it pulls in only when a task calls for it.',
-  'bullets': ['company/AGENTS.md is the always-on system prompt',
-              'Skills are listed by name and description only',
-              "load_skill pulls a skill's full text on demand"],
-  'unlocked_tools': ['load_skill'],
+  'problem': 'The model knows nothing about Kestrel, so it invents our prices and our rules. AGENTS.md is '
+             'the always-on company file: who we are, our plans and prices, and the business rules every '
+             'answer must follow. It rides in the system prompt of every call; nothing else about the call '
+             'changes.',
+  'bullets': ['company/AGENTS.md becomes the system prompt',
+              'Facts: the company, plans and list prices',
+              'Rules: discounts, tone, what we never promise',
+              'Same single call as stage 0: no tools, no loop'],
+  'unlocked_tools': [],
   'middlewares': [],
   'subagents': [],
-  'new_keywords': ['instructions', 'skills']},
+  'new_keywords': ['instructions']},
  {'id': 2,
   'name': 'Actions',
   'component': 'actions',
-  'tagline': 'Tools, the agent loop, middleware and a subagent.',
+  'tagline': 'Tools, the agent loop, middleware, skills on demand and a subagent.',
   'headline': 'Let it look things up itself',
-  'problem': "With context alone, the model still can't see our records, so we had to tell it who Acme is. "
-             'It needs tools to fetch facts, a loop that keeps going until the job is done, and a second '
-             'pair of eyes on its draft. A loop also needs a brake, or one bad request runs forever.',
-  'bullets': ['Four company tools declared with @tool',
-              'The agent loop: model -> tools -> results -> model',
-              'Middleware: CallLimit budgets, TodoTracker plans',
+  'problem': "AGENTS.md can't hold every customer record or every playbook, so we still had to tell it who "
+             'Acme is. Now the model has to fetch facts and know-how itself: tools for our records, skills '
+             'it loads only when a task needs them, a reviewer for its draft. A loop that keeps calling '
+             'tools also needs a brake.',
+  'bullets': ['Five company tools declared with @tool, run in a loop',
+              'Skills listed by name; load_skill pulls one in on demand',
+              'CallLimit middleware: a budget on every run',
               'A proposal-reviewer subagent with its own context'],
-  'unlocked_tools': ['lookup_customer',
+  'unlocked_tools': ['load_skill',
+                     'list_customers',
+                     'lookup_customer',
                      'lookup_issue',
                      'get_revenue',
                      'send_proposal',
-                     'update_todos',
                      'run_subagent'],
-  'middlewares': ['CallLimit', 'TodoTracker'],
+  'middlewares': ['CallLimit'],
   'subagents': ['proposal-reviewer'],
-  'new_keywords': ['tools', 'middleware', 'subagents']},
+  'new_keywords': ['tools', 'middleware', 'skills', 'subagents']},
  {'id': 3,
   'name': 'Boundaries',
   'component': 'boundaries',
-  'tagline': 'Role permissions, protected paths, human approval, audit log.',
+  'tagline': 'Role permissions, human approval, audit log.',
   'headline': 'Draw the lines in code',
   'problem': 'Now the agent can act, and it treats every user the same. An engineer can pull revenue, anyone '
              "can email a customer, and a prompt that says please don't is not a control. Permissions, "
              "approvals and an audit trail have to live in the harness, where the model can't talk its way "
              'past them.',
   'bullets': ['RoleGate: each role gets only its tools',
-              'ProtectedPaths: company files and code are never writable',
               "send_proposal pauses for a human's approval",
+              'The tool itself rejects addresses not on record',
               'Every tool call is written to an audit log'],
   'unlocked_tools': [],
-  'middlewares': ['RoleGate', 'ProtectedPaths', 'ApprovalGate', 'CallLimit', 'TodoTracker', 'AuditLog'],
+  'middlewares': ['RoleGate', 'ApprovalGate', 'CallLimit', 'AuditLog'],
   'subagents': ['proposal-reviewer'],
-  'new_keywords': ['permissions', 'approve', 'protected_paths', 'audit']},
+  'new_keywords': ['permissions', 'approve', 'audit']},
  {'id': 4,
   'name': 'Persistence',
   'component': 'persistence',
@@ -91,96 +95,111 @@ HARNESS_STAGES: list[dict] = [{'id': 0,
               'A writable workspace/ with file tools',
               'Compactor summarizes old turns when the prompt grows'],
   'unlocked_tools': ['write_workspace_file', 'read_workspace_file', 'list_workspace_files'],
-  'middlewares': ['RoleGate',
-                  'ProtectedPaths',
-                  'ApprovalGate',
-                  'CallLimit',
-                  'TodoTracker',
-                  'AuditLog',
-                  'Compactor'],
+  'middlewares': ['RoleGate', 'ApprovalGate', 'CallLimit', 'AuditLog', 'Compactor'],
   'subagents': ['proposal-reviewer'],
   'new_keywords': ['checkpointer', 'workspace', 'compaction']}]
 
-SCENARIOS: dict[int, list[dict]] = {0: [{'title': 'Does it know us?',
+SCENARIOS: dict[int, list[dict]] = {0: [{'title': "Who's Acme?",
       'role': 'sales',
-      'prompt': 'What do you know about Kestrel Software and our proposal process?',
-      'watch': "The model guesses or admits it doesn't know. Nothing lights up but the model."}],
- 1: [{'title': 'Skill-guided draft',
+      'prompt': 'Who is Acme Robotics and when is their renewal due?',
+      'watch': "It can't know. Nothing is around the model.",
+      'resume': False},
+     {'title': 'Price the renewal',
       'role': 'sales',
-      'prompt': 'Use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, 40 '
-                'seats, they care about SSO and audit logs.',
-      'watch': "load_skill fires (Context node), and the draft follows the skill's sections. We still had to "
-               'explain who Acme is.'}],
- 2: [{'title': 'Look it up yourself',
+      'prompt': 'Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing.',
+      'watch': 'It invents a price, or asks for one. It has no idea what our plans cost.',
+      'resume': False}],
+ 1: [{'title': 'Price the renewal, again',
       'role': 'sales',
-      'prompt': 'Draft a proposal for Acme Robotics and have the proposal-reviewer check it before you show '
-                'it to me.',
-      'watch': "lookup_customer, a todo list, then the subagent's nested review."},
-     {'title': 'Runaway loop',
+      'prompt': 'Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing.',
+      'watch': 'Plan-table price ($2,400 per seat per year), our tone, our sections, no discount. Tokens in '
+               'jumped: AGENTS.md rides on every call. We still had to say who Acme is.',
+      'resume': False},
+     {'title': 'Can I discount?',
+      'role': 'sales',
+      'prompt': 'Can I offer Acme 15% off to close this quarter?',
+      'watch': '"No: above 10% needs written approval from finance", straight from AGENTS.md. A business '
+               'rule, not a fact.',
+      'resume': False}],
+ 2: [{'title': 'Prepare the renewal',
+      'role': 'sales',
+      'prompt': "Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the "
+                'proposal-reviewer check it before you show it to me.',
+      'watch': 'load_skill pulls the playbook, lookup_customer and lookup_issue pull the facts, the reviewer '
+               'runs as a nested subagent. The model fetched what it needed.',
+      'resume': False},
+     {'title': 'Account health, every customer',
       'role': 'engineering',
-      'prompt': 'For every open issue, look up its customer, then look up every other issue for that '
-                'customer, and keep going until you have checked everything twice.',
-      'watch': 'CallLimit stops it.'}],
+      'prompt': 'Give me an account health report for every customer: their record plus their open issues.',
+      'watch': 'A realistic over-sized request. CallLimit denies the 11th tool call; the model reports '
+               'partial results and says why.',
+      'resume': False}],
  3: [{'title': 'Wrong role',
       'role': 'engineering',
       'prompt': 'What was our revenue in FY2026?',
-      'watch': 'RoleGate denies get_revenue; the model says so instead of guessing.'},
+      'watch': 'RoleGate denies get_revenue, in code, before it runs; the model says so instead of guessing.',
+      'resume': False},
      {'title': 'Right role',
       'role': 'finance',
       'prompt': 'What was our revenue in FY2026?',
-      'watch': 'Same question, allowed, answered with record ids.'},
-     {'title': 'Needs a human',
+      'watch': 'Same question, allowed, answered with record ids.',
+      'resume': False},
+     {'title': 'Send it',
       'role': 'sales',
-      'prompt': 'Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and send '
-                'it to procurement@acme-robotics.example with the subject "Kestrel Enterprise proposal".',
-      'watch': 'The approval card appears and the loop waits. Approve -> an outbox file and an audit line. '
-               'Try the same with ceo@acme-robotics.example: the tool rejects the unverified address.'}],
- 4: [{'title': 'Save it',
+      'prompt': 'Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit logs) '
+                'and send it to procurement@acme-robotics.example with the subject "Kestrel renewal '
+                'proposal".',
+      'watch': 'The approval card appears and the loop waits. Approve → outbox file + audit line. Variant: '
+               'send to ceo@acme-robotics.example and the tool rejects the address as not on record.',
+      'resume': False}],
+ 4: [{'title': 'Save the draft',
       'role': 'sales',
-      'prompt': 'Draft a short Enterprise proposal for Acme Robotics (40 seats, SSO and audit logs) and save '
-                'it as workspace/acme-proposal.md. Give me the path.',
-      'watch': 'write_workspace_file (Persistence node); checkpoint events. Also show a write to '
-               'company/AGENTS.md being blocked.'},
-     {'title': 'Come back tomorrow',
+      'prompt': 'Draft a short renewal proposal for Acme Robotics (40 seats, Enterprise, SSO and audit '
+                'logs), save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the '
+                'Acme draft is done.',
+      'watch': 'write_workspace_file writes the draft and checkpoints tick up; the AGENTS.md write is '
+               'refused by the tool (outside workspace/), and the model reports it.',
+      'resume': False},
+     {'title': "Pick up yesterday's work",
       'role': 'sales',
-      'prompt': 'What did we save earlier, and what was in it?',
-      'watch': 'Resume the previous session first: resumed history answers without re-reading. Then trigger '
-               'compaction on a long session and show the summary marker.'}]}
+      'prompt': 'Where did we leave off with Acme, and what did we save?',
+      'watch': 'Run resumes the most recent saved session from SQLite (the divider says so) and answers from '
+               'history. In the sidebar the session is highlighted.',
+      'resume': True},
+     {'title': 'Long day',
+      'role': 'sales',
+      'prompt': '',
+      'watch': '9 → 7 messages, a compaction row with the summary.',
+      'resume': False}]}
 
 SNIPPETS: dict[int, list[dict]] = {0: [{'file': 'harness/stages.py',
       'title': 'A chatbot: a model and a prompt',
       'code': 'return Agent(model=llm, **common)'}],
  1: [{'file': 'harness/stages.py',
-      'title': 'Context: company instructions and skills',
-      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", skills=SKILLS_DIR, **common)'},
-     {'file': 'harness/context.py',
-      'title': 'Skills load on demand',
-      'code': '@tool(component="context")\n'
-              'async def load_skill(name: str, ctx: RunContext) -> str:\n'
-              '    """Load the full instructions of a skill listed in the system prompt.\n'
-              '    Call it before doing the kind of task the skill covers."""\n'
-              '    if name not in by_name:\n'
-              '        raise ToolError(f"Unknown skill \'{name}\'. Valid names: {\', \'.join(by_name)}")\n'
-              '    return by_name[name].body'}],
+      'title': 'Context: the company file, always on',
+      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", **common)'}],
  2: [{'file': 'harness/stages.py',
-      'title': 'Actions: tools, a loop with middleware, a subagent',
-      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", skills=SKILLS_DIR,\n'
-              '             tools=COMPANY_TOOLS, middleware=[CallLimit(), TodoTracker()],\n'
-              '             subagents=[PROPOSAL_REVIEWER], **common)'},
+      'title': 'Actions: tools, a loop with middleware, skills on demand, a subagent',
+      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md",\n'
+              '             tools=COMPANY_TOOLS, middleware=[CallLimit()],\n'
+              '             skills=SKILLS_DIR, subagents=[PROPOSAL_REVIEWER], **common)'},
      {'file': 'harness/tools_company.py',
       'title': 'A tool is a typed, documented function',
       'code': '@tool(component="actions")\n'
               'async def lookup_customer(name: str, ctx: RunContext) -> str:\n'
-              '    """Look up a Kestrel customer by (partial) company name.\n'
-              '    Returns the customer record: plan, seats, ARR, contact, renewal date and notes."""\n'
-              '    query = name.strip().lower()\n'
-              '    customers = _customers()\n'
-              '    exact = [c for c in customers if c["name"].lower() == query]\n'
-              '    matches = exact or [c for c in customers if query in c["name"].lower()]\n'
+              '    """Get ONE customer\'s full record by id (cust_acme) or company name (partial is fine):\n'
+              '    plan, seats, ARR, contact, renewal date and notes."""\n'
+              '    if len(name.strip()) < 2:\n'
+              '        raise ToolError("Give at least 2 characters of a customer id or name.")\n'
+              '    matches = _match_customers(name)\n'
               '    if not matches:\n'
-              '        raise ToolError(f"No customer matches \'{name}\'. Known: {\', \'.join(c[\'name\'] for '
-              'c in customers)}")\n'
-              '    return _pretty(matches[0] if len(matches) == 1 else matches)'},
+              '        raise ToolError(f"No customer matches \'{name}\'. list_customers shows every '
+              'customer.")\n'
+              '    if len(matches) > 1:  # like a real CRM: a vague query gets a pick-list, never every '
+              'record\n'
+              '        picks = "\\n".join(f"- {c[\'id\']}: {c[\'name\']}" for c in matches)\n'
+              '        return f"{len(matches)} customers match \'{name}\'; be more specific:\\n{picks}"\n'
+              '    return _pretty(matches[0])'},
      {'file': 'harness/subagents.py',
       'title': 'A subagent: its own prompt, a subset of tools, a cheaper model',
       'code': 'PROPOSAL_REVIEWER = SubagentDef(\n'
@@ -188,31 +207,29 @@ SNIPPETS: dict[int, list[dict]] = {0: [{'file': 'harness/stages.py',
               '    description="Checks a drafted proposal against the customer record and flags commitments '
               '"\n'
               '                "the record does not support. Use after drafting any proposal.",\n'
-              '    system_prompt="You are a read-only proposal reviewer at Kestrel Software. Call '
-              'lookup_customer "\n'
-              '                  "for the customer in the draft, then return a terse checklist with three '
+              '    system_prompt="You are a read-only proposal reviewer at Kestrel Software. If the task '
+              'names a "\n'
+              '                  "saved draft and you have read_workspace_file, read it. Call '
+              'lookup_customer for "\n'
+              '                  "the customer in the draft, then return a terse checklist with three '
               'headings: "\n'
               '                  "Supported, Unsupported, Missing. Cite the customer id. Do not rewrite the '
               'proposal.",\n'
-              '    tools=["lookup_customer"],\n'
+              '    tools=["lookup_customer", "read_workspace_file"],  # only those the parent has are given\n'
               ')'}],
  3: [{'file': 'harness/stages.py',
-      'title': 'Boundaries: roles, protected paths, human approval, audit',
-      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", skills=SKILLS_DIR,\n'
-              '             tools=COMPANY_TOOLS, middleware=[CallLimit(), TodoTracker()],\n'
-              '             subagents=[PROPOSAL_REVIEWER], permissions=ROLE_TOOLS,\n'
-              '             approve={"send_proposal"}, protected_paths=PROTECTED_PATHS, audit=True, '
-              '**common)'},
+      'title': 'Boundaries: roles, human approval, audit',
+      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md",\n'
+              '             tools=COMPANY_TOOLS, middleware=[CallLimit()],\n'
+              '             skills=SKILLS_DIR, subagents=[PROPOSAL_REVIEWER],\n'
+              '             permissions=ROLE_TOOLS, approve={"send_proposal"}, audit=True, **common)'},
      {'file': 'harness/middleware.py',
-      'title': 'Who may use which tool, and what is never writable',
+      'title': 'Who may use which tool',
       'code': 'ROLE_TOOLS: dict[str, set[str]] = {\n'
-              '    "sales":       {"lookup_customer", "send_proposal"},\n'
-              '    "engineering": {"lookup_customer", "lookup_issue"},\n'
-              '    "finance":     {"lookup_customer", "get_revenue"},\n'
-              '}\n'
-              '\n'
-              'PROTECTED_PATHS = [config.COMPANY_DIR, config.SKILLS_DIR,\n'
-              '                   config.REPO_ROOT / "harness", config.REPO_ROOT / "app"]'},
+              '    "sales":       {"list_customers", "lookup_customer", "send_proposal"},\n'
+              '    "engineering": {"list_customers", "lookup_customer", "lookup_issue"},\n'
+              '    "finance":     {"list_customers", "lookup_customer", "get_revenue"},\n'
+              '}'},
      {'file': 'harness/tools_company.py',
       'title': 'The tool checks what the model might get wrong',
       'code': '@tool(component="actions", read_only=False, requires_approval=True)\n'
@@ -235,10 +252,10 @@ SNIPPETS: dict[int, list[dict]] = {0: [{'file': 'harness/stages.py',
               '    return f"Queued to outbox: {path}"'}],
  4: [{'file': 'harness/stages.py',
       'title': 'Persistence: checkpoints, a workspace, compaction',
-      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md", skills=SKILLS_DIR,\n'
-              '             tools=COMPANY_TOOLS, middleware=[CallLimit(), TodoTracker()],\n'
-              '             subagents=[PROPOSAL_REVIEWER], permissions=ROLE_TOOLS,\n'
-              '             approve={"send_proposal"}, protected_paths=PROTECTED_PATHS, audit=True,\n'
+      'code': 'return Agent(model=llm, instructions=COMPANY_DIR / "AGENTS.md",\n'
+              '             tools=COMPANY_TOOLS, middleware=[CallLimit()],\n'
+              '             skills=SKILLS_DIR, subagents=[PROPOSAL_REVIEWER],\n'
+              '             permissions=ROLE_TOOLS, approve={"send_proposal"}, audit=True,\n'
               '             checkpointer=store or SessionStore(), workspace=WORKSPACE_DIR,\n'
               '             compaction=Compactor(at_tokens=settings.compact_at_tokens), **common)'},
      {'file': 'harness/tools_workspace.py',

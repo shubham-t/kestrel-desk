@@ -10,7 +10,7 @@ from pathlib import Path
 from .compaction import Compactor
 from .context import DEFAULT_INSTRUCTIONS, compose_prompt, discover_skills, make_load_skill_tool
 from .llm import LLM
-from .middleware import ApprovalGate, AuditLog, CallLimit, ProtectedPaths, RoleGate
+from .middleware import ApprovalGate, AuditLog, CallLimit, RoleGate
 from .middleware_base import Middleware
 from .subagents import SubagentDef, make_run_subagent_tool
 from .tooling import Tool, ToolRegistry
@@ -32,7 +32,7 @@ def _model_switcher(llm: LLM):
 def assemble(*, llm: LLM, role: str, instructions: str | Path, skills: Path | None,
              tools: list[Tool], middleware: list[Middleware], subagents: list[SubagentDef],
              permissions: dict[str, set[str]] | None, approve: set[str] | None,
-             protected_paths: list[Path] | None, audit: bool, workspace: Path | None,
+             audit: bool, workspace: Path | None,
              compaction: Compactor | None) -> Harness:
     text = instructions.read_text(encoding="utf-8") if isinstance(instructions, Path) else instructions
     skill_list = discover_skills(skills) if skills else []
@@ -47,8 +47,6 @@ def assemble(*, llm: LLM, role: str, instructions: str | Path, skills: Path | No
     chain: list[Middleware] = []
     if permissions is not None:
         chain.append(RoleGate(permissions))
-    if protected_paths is not None:
-        chain.append(ProtectedPaths(protected_paths))
     if approve:
         chain.append(ApprovalGate(approve))
     chain += list(middleware)

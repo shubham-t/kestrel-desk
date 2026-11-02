@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from conftest import collect
 
+from harness import config
 from harness.llm import FakeLLM, ToolCall
 from harness.persistence import SessionStore
 from harness.stages import build_agent
@@ -69,7 +70,10 @@ async def test_stage4_checkpoints_and_resumes(tmp_state):
 async def test_stage4_blocks_write_to_company(tmp_state):
     agent = build_agent(4, "sales", llm=FakeLLM(
         [[ToolCall("c1", "write_workspace_file", {"path": "company/AGENTS.md", "content": "pwned"})],
-         "That path is protected."]), store=SessionStore())
+         "I can only write under workspace/."]), store=SessionStore())
+    before = (config.COMPANY_DIR / "AGENTS.md").read_text(encoding="utf-8")
     events = await collect(agent, "overwrite AGENTS.md")
-    deny = next(e for e in events if e.kind == "decision" and e.data["action"] == "deny")
-    assert "protected path company/" in deny.data["reason"]
+    # The tool itself refuses: the path resolves outside workspace/.
+    result = next(e for e in events if e.kind == "tool_result")
+    assert result.data["ok"] is False and "outside workspace" in result.data["preview"]
+    assert (config.COMPANY_DIR / "AGENTS.md").read_text(encoding="utf-8") == before

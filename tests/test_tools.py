@@ -6,7 +6,8 @@ import pytest
 
 from harness import config
 from harness.context import discover_skills, make_load_skill_tool
-from harness.tools import (ToolError, get_revenue, list_workspace_files, lookup_customer, lookup_issue,
+from harness.tools import (ToolError, get_revenue, list_customers, list_workspace_files, lookup_customer,
+                           lookup_issue,
                            read_workspace_file, send_proposal, tool, update_todos, write_workspace_file)
 
 
@@ -38,22 +39,45 @@ def test_company_tool_schemas_hide_ctx():
 
 
 @pytest.mark.asyncio
-async def test_lookup_customer_partial_and_exact(ctx):
-    record = json.loads(await lookup_customer.handler({"name": "acme"}, ctx))
+async def test_list_customers_is_short(ctx):
+    lines = (await list_customers.handler({}, ctx)).splitlines()
+    assert len(lines) == 7 and lines[0] == "cust_acme: Acme Robotics (Growth)"
+    assert list_customers.read_only and list_customers.component == "actions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["acme", "Acme Robotics", "cust_acme", "CUST_ACME"])
+async def test_lookup_customer_by_name_or_id(ctx, query):
+    record = json.loads(await lookup_customer.handler({"name": query}, ctx))
     assert record["id"] == "cust_acme"
     assert record["contact_email"] == "procurement@acme-robotics.example"
-    with pytest.raises(ToolError):
+
+
+@pytest.mark.asyncio
+async def test_lookup_customer_never_dumps_every_record(ctx):
+    """A broad query returns a pick-list of ids and names, not full records."""
+    text = await lookup_customer.handler({"name": "cust"}, ctx)
+    assert "be more specific" in text and "cust_acme: Acme Robotics" in text
+    assert "contact_email" not in text and "arr_usd" not in text
+    with pytest.raises(ToolError, match="at least 2"):
+        await lookup_customer.handler({"name": "a"}, ctx)
+    with pytest.raises(ToolError, match="list_customers"):
         await lookup_customer.handler({"name": "Globex"}, ctx)
 
 
 @pytest.mark.asyncio
-async def test_lookup_issue_by_id_and_text(ctx):
+async def test_lookup_issue_by_id_customer_and_title(ctx):
     by_id = json.loads(await lookup_issue.handler({"query": "ISS-1043"}, ctx))
     assert [i["id"] for i in by_id] == ["ISS-1043"]
-    by_customer = json.loads(await lookup_issue.handler({"query": "northwind"}, ctx))
-    assert {i["id"] for i in by_customer} == {"ISS-1041", "ISS-1042"}
-    open_issues = json.loads(await lookup_issue.handler({"query": "open"}, ctx))
-    assert all(i["status"] != "resolved" for i in open_issues)
+    for q in ("northwind", "cust_northwind", "Northwind Freight"):
+        by_customer = json.loads(await lookup_issue.handler({"query": q}, ctx))
+        assert {i["id"] for i in by_customer} == {"ISS-1041", "ISS-1042"}, q
+    by_title = json.loads(await lookup_issue.handler({"query": "audit log export"}, ctx))
+    assert [i["id"] for i in by_title] == ["ISS-1043"]
+    with pytest.raises(ToolError):
+        await lookup_issue.handler({"query": "  "}, ctx)
+    with pytest.raises(ToolError):  # no "list everything" shortcut
+        await lookup_issue.handler({"query": "open"}, ctx)
 
 
 @pytest.mark.asyncio
@@ -104,6 +128,17 @@ async def test_workspace_round_trip(ctx, tmp_state):
 async def test_workspace_path_escape_blocked(ctx, tmp_state, bad):
     with pytest.raises(ToolError, match="outside workspace"):
         await write_workspace_file.handler({"path": bad, "content": "x"}, ctx)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["company/AGENTS.md", "../company/AGENTS.md", "skills/x/SKILL.md",
+                                 "harness/loop.py"])
+async def test_workspace_refuses_company_and_code_paths(ctx, tmp_state, bad):
+    """The stage-4 'Save the draft' scenario: the AGENTS.md write is refused by the tool itself.
+    A repo path is never quietly redirected into a look-alike copy under workspace/."""
+    with pytest.raises(ToolError, match="outside workspace"):
+        await write_workspace_file.handler({"path": bad, "content": "x"}, ctx)
+    assert not (config.WORKSPACE_DIR / "company").exists()
 
 
 @pytest.mark.asyncio

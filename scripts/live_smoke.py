@@ -28,7 +28,7 @@ def short(s: str, n: int = PREVIEW) -> str:
 async def run_one(stage: int, sc, session_id: str | None = None) -> dict:
     agent = build_agent(stage, sc.role, session_id=session_id, approvals=AutoApprove())
     kinds: Counter[str] = Counter()
-    denies, approvals, tools, text = [], [], [], []
+    denies, approvals, tools, text, results = [], [], [], [], []
     t0 = time.time()
     async for ev in agent.run(sc.prompt):
         kinds[ev.kind] += 1
@@ -43,6 +43,7 @@ async def run_one(stage: int, sc, session_id: str | None = None) -> dict:
             approvals.append(ev.data)
             print(f"    {tag}approval    {ev.data.get('tool')}")
         elif ev.kind == "tool_result":
+            results.append(ev.data)
             print(f"    {tag}tool_result {ev.data.get('name')} ok={ev.data.get('ok')} {short(ev.data.get('preview', ''), 70)}")
         elif ev.kind in ("subagent_start", "subagent_end", "compaction", "checkpoint", "todo_update", "error"):
             print(f"    {tag}{ev.kind:<11} {short(ev.data, 90)}")
@@ -55,7 +56,7 @@ async def run_one(stage: int, sc, session_id: str | None = None) -> dict:
                   f"{time.time() - t0:.1f}s")
     final = " ".join(text)
     print(f"    reply       {short(final, 160)}")
-    return {"kinds": kinds, "denies": denies, "approvals": approvals, "tools": tools,
+    return {"kinds": kinds, "denies": denies, "approvals": approvals, "tools": tools, "results": results,
             "text": final, "session_id": agent.session_id}
 
 
@@ -66,34 +67,53 @@ def expect(cond: bool, what: str, results: list[str]) -> None:
 async def main() -> int:
     stages = [int(a) for a in sys.argv[1:]] or [0, 1, 2, 3, 4]
     results: list[str] = []
-    saved_session = None
+    saved_session = None  # the "Save the draft" session; "Pick up yesterday's work" resumes it
     for stage in stages:
         for sc in scenarios(stage):
             print(f"\n== stage {stage} · {sc.title} · role={sc.role}\n   prompt: {short(sc.prompt, 110)}")
-            resume = saved_session if (stage == 4 and sc.title.startswith("Come back")) else None
+            if not sc.prompt:  # "Long day" is the Compact now button in the UI
+                print("   skipped (UI button)")
+                continue
+            resume = saved_session if sc.resume else None
+            if sc.resume:
+                print(f"   resuming session {resume}" if resume else "   no saved session to resume (run stage 4 in full)")
             r = await run_one(stage, sc, session_id=resume)
-            k, name = r["kinds"], f"s{stage} {sc.title}"
+            k, name, text = r["kinds"], f"s{stage} {sc.title}", r["text"]
             expect(k["error"] == 0, f"{name}: no error events", results)
-            if stage == 0:
-                expect(k["tool_call"] == 0, f"{name}: no tools at stage 0", results)
-            if stage == 1:
-                expect("load_skill" in r["tools"], f"{name}: load_skill was called", results)
-            if stage == 2 and sc.title.startswith("Look"):
+            if stage in (0, 1):
+                expect(k["tool_call"] == 0, f"{name}: no tool calls at stage {stage}", results)
+            if stage == 1 and sc.title.startswith("Price the renewal"):
+                expect("2,400" in text or "2400" in text, f"{name}: quotes the plan-table price (2,400)", results)
+            if stage == 2 and sc.title.startswith("Prepare"):
                 expect("lookup_customer" in r["tools"], f"{name}: lookup_customer called", results)
+                expect(not any(res.get("name") == "lookup_customer" and not res.get("ok") for res in r["results"]),
+                       f"{name}: every lookup_customer call succeeded", results)
+                expect("load_skill" in r["tools"], f"{name}: load_skill called", results)
                 expect(k["subagent_start"] >= 1, f"{name}: subagent ran", results)
-            if stage == 2 and sc.title.startswith("Runaway"):
-                expect(any("limit" in str(d.get("reason", "")).lower() for d in r["denies"]), f"{name}: CallLimit stopped it", results)
+            if stage == 2 and sc.title.startswith("Account health"):
+                expect(any(d.get("action") == "deny" and "limit" in str(d.get("reason", "")).lower()
+                           for d in r["denies"]), f"{name}: CallLimit denied a call", results)
             if stage == 3 and sc.title == "Wrong role":
                 expect(any("role" in str(d.get("reason", "")).lower() for d in r["denies"]), f"{name}: RoleGate denied", results)
             if stage == 3 and sc.title == "Right role":
                 expect("get_revenue" in r["tools"] and not r["denies"], f"{name}: get_revenue allowed", results)
-            if stage == 3 and sc.title.startswith("Needs"):
+            if stage == 3 and sc.title == "Send it":
                 expect(len(r["approvals"]) >= 1, f"{name}: approval requested", results)
             if stage == 4 and sc.title.startswith("Save"):
                 expect("write_workspace_file" in r["tools"], f"{name}: write_workspace_file called", results)
+                refused_by_tool = any(not res.get("ok") and "workspace" in str(res.get("preview", "")).lower()
+                                      for res in r["results"])
+                said_so = "workspace" in text.lower() and any(
+                    w in text.lower() for w in ("can't", "cannot", "couldn't", "could not", "not able",
+                                                "unable", "outside", "refused", "not allowed"))
+                how = ("tool refused the AGENTS.md write" if refused_by_tool
+                       else "model said it couldn't write outside workspace" if said_so else "neither")
+                expect(refused_by_tool or said_so, f"{name}: AGENTS.md write refused ({how})", results)
                 saved_session = r["session_id"]
-            if stage == 4 and resume:
-                expect(bool(r["text"]), f"{name}: resumed session answered", results)
+            if sc.resume:
+                expect(resume is not None, f"{name}: had a saved session to resume", results)
+                expect(bool(text.strip()) and "acme-renewal" in text.lower(),
+                       f"{name}: resumed session answered and mentions acme-renewal", results)
     print("\n" + "\n".join(results))
     return 1 if any(x.startswith("FAIL") for x in results) else 0
 

@@ -1,13 +1,13 @@
 /* Kestrel Desk web app: Screen A (add a stage), Screen B (chat), and the code/scenarios drawer.
    Vanilla ES2020, no build step, no network beyond this server's /api. Sections:
-   state · util · api · sse · screen A · strip · transcript · events · approval · drawer · keyboard · boot */
+   state · util · api · sse · screen A · strip · transcript · events · approval · sessions sidebar · drawer · keyboard · boot */
 'use strict';
 (() => {
   // ================================================================== state
   const COMPONENTS = [
-    { id: 'context', name: 'Context', blurb: 'Company instructions, skills on demand' },
-    { id: 'actions', name: 'Actions', blurb: 'Tools, the loop, middleware, a subagent' },
-    { id: 'boundaries', name: 'Boundaries', blurb: 'Roles, protected paths, approval, audit' },
+    { id: 'context', name: 'Context', blurb: 'Company instructions, always on' },
+    { id: 'actions', name: 'Actions', blurb: 'Tools, the loop, skills, a subagent' },
+    { id: 'boundaries', name: 'Boundaries', blurb: 'Roles, approval, audit' },
     { id: 'persistence', name: 'Persistence', blurb: 'Checkpoints, workspace, compaction' },
   ];
   const STATUS = { ready: 'READY', thinking: 'THINKING', tool: 'RUNNING TOOL', waiting: 'WAITING FOR APPROVAL',
@@ -19,6 +19,7 @@
     running: false, userStopped: false, turn: null, stick: true,
     facts: null, checkpoints: 0, scenario: null, doneScenarios: new Set(),
     contacts: new Set(), approvals: new Map(), drawerTab: 'code',
+    sessions: [], sessErr: '', sessLoading: false, scnNote: null,
   };
   const freshFacts = () => ({ model: 0, tool: 0, blocked: 0, tin: 0, tout: 0, audit: 0, outbox: 0 });
   S.facts = freshFacts();
@@ -98,14 +99,26 @@
     return res.json();
   }
 
-  async function ensureSession({ resumeId = null, showHistory = true } = {}) {
+  // Session opens are serialized: opening the chat, resuming and sending can overlap during a scenario run.
+  let sessLock = Promise.resolve();
+  function ensureSession(opts = {}) { const p = sessLock.then(() => openSession(opts)); sessLock = p.catch(() => {}); return p; }
+
+  const resumedText = (id) => `Resumed session ${id} from SQLite`;
+
+  async function openSession({ resumeId = null, showHistory = true } = {}) {
     if (S.session && !resumeId && S.session.stage === S.stage && S.session.role === S.role) return S.session;
     await dropSession();
     const r = await api('/api/session', { method: 'POST', body: { stage: S.stage, role: S.role, resume_session_id: resumeId } });
     S.session = { key: r.session_key, id: r.session_id, stage: S.stage, role: S.role };
     connect();
-    if (showHistory && r.history && r.history.length) renderHistory(r.history, r.resumed);
+    const n = (r.history || []).length;
+    if (showHistory) {
+      if (n) renderHistory(r.history);
+      if (resumeId) divider(r.resumed || n ? resumedText(r.session_id) : `Session ${resumeId} was not in SQLite · started fresh`);
+      else if (n) divider(`${n} earlier messages`);
+    }
     refreshCounts();
+    if (hasSidebar()) renderSidebar();
     return S.session;
   }
 
@@ -198,7 +211,8 @@
       if (S.view === 'chat') {
         if (old && old.stage >= 4) {
           await ensureSession({ resumeId: old.id, showHistory: false });
-          divider(`Resumed session ${old.id} from SQLite after the restart`);
+          divider(`${resumedText(old.id)} after the restart`);
+          loadSessions();
           msg += ` Stage 4 checkpoints let session ${old.id} pick up where it left off.`;
         } else {
           await ensureSession();
@@ -284,13 +298,17 @@
     const group = (label, items, cls) => { if (items && items.length) pills.push(`<span class="label">${label}</span>` + items.map((t) => `<span class="pill ${cls}">${esc(subName(t))}</span>`).join('')); };
     group('TOOLS', st.unlocked_tools, 'tool');
     group('MIDDLEWARE', st.middlewares, 'mw');
-    group('SUBAGENTS', n === 2 || !(stageMeta(n - 1).subagents || []).length ? st.subagents : [], 'sub');
-    $('#pills').innerHTML = pills.join('') || '<span class="hint">Nothing around the model yet: no tools, no middleware, no memory.</span>';
+    const prevSubs = n > 0 ? (stageMeta(n - 1).subagents || []).map(subName) : []; // subagents new at this stage
+    group('SUBAGENTS', (st.subagents || []).filter((s) => !prevSubs.includes(subName(s))), 'sub');
+    $('#pills').innerHTML = pills.join('') || `<span class="hint">${newKeywords().length
+      ? 'No tools or middleware at this stage: the whole change is in the Agent(...) call.'
+      : 'Nothing around the model yet: no tools, no middleware, no memory.'}</span>`;
     $('#codeHead').innerHTML = codeHead();
     renderCode($('#codeBlocks'), snippets(), newKeywords(), reveal);
     const sc = scenarios()[0];
     $('#nextBar').hidden = !sc;
-    if (sc) $('#nextText').innerHTML = `<b>${esc(sc.title)}</b> <i>as ${esc(cap(sc.role))}</i> · “${esc(short(sc.prompt, 90))}”`;
+    if (sc) $('#nextText').innerHTML = `<b>${esc(sc.title)}</b> <i>as ${esc(cap(sc.role))}</i> · ` +
+      (sc.prompt ? `“${esc(short(sc.prompt, 90))}”` : esc(short(sc.watch, 90)));
     renderStrip();
     renderCrumb();
     $('#chatStageLine').textContent = `Stage ${n} · ${st.name} · ${S.meta.model || ''}`;
@@ -324,6 +342,7 @@
     $('#screenChat').hidden = view !== 'chat';
     renderCrumb();
     history.replaceState(null, '', `#s=${S.stage}&v=${view}`);
+    syncSidebar();
     if (view === 'chat') {
       const w = $('#chatwin');
       w.classList.remove('rise'); void w.offsetWidth; w.classList.add('rise');
@@ -471,7 +490,7 @@
 
   function toolTitle(name, args) { return `<span class="name">${esc(name)}</span><code>${esc(argsSummary(args))}</code>`; }
 
-  function renderHistory(history, resumed) {
+  function renderHistory(history) { // the caller adds the divider underneath
     clearEmpty();
     let ctx = null;
     for (const m of history) {
@@ -497,7 +516,6 @@
         if (call) setRow(call.el, { detail: esc(short(String(m.content || ''), 300)), mono: true });
       }
     }
-    divider(resumed ? `Resumed session ${S.session ? S.session.id : ''} · ${history.length} messages from SQLite` : `${history.length} earlier messages`);
   }
 
   function renderFacts() {
@@ -516,6 +534,7 @@
     $('#stopBtn').disabled = !busy;
     $('#roleSeg').querySelectorAll('button').forEach((b) => { b.disabled = busy; });
     renderScenarios();
+    if (hasSidebar()) renderSidebar();
   }
 
   async function send(text) {
@@ -557,10 +576,10 @@
   // ================================================================== events (every Event kind in SPEC; unknown kinds never crash)
   function gateChain(action, reason) {
     const mws = stageMeta().middlewares || [];
-    const gates = ['RoleGate', 'ProtectedPaths', 'ApprovalGate'].filter((g) => mws.includes(g));
+    const gates = ['RoleGate', 'ApprovalGate'].filter((g) => mws.includes(g)); // path confinement lives in the workspace tools, not a gate
     if (action === 'allow') return gates.map((g) => `${g} allow`).join(' · ');
     if (action === 'ask') return gates.map((g) => `${g} ${g === 'ApprovalGate' ? 'ask' : 'allow'}`).join(' · ');
-    const who = /^Role '/.test(reason) ? 'RoleGate' : /protected|workspace/i.test(reason) ? 'ProtectedPaths' : /limit/i.test(reason) ? 'CallLimit' : null;
+    const who = /^Role '/.test(reason) ? 'RoleGate' : /limit/i.test(reason) ? 'CallLimit' : null;
     if (!who) return 'harness deny';
     const order = [...gates, 'CallLimit'].filter((g) => mws.includes(g) || g === who);
     const out = [];
@@ -685,6 +704,7 @@
       part(t.ckRow, 'ts').textContent = clock(ev.ts);
       setRow(t.ckRow, { detail: text });
       pulse('persistence');
+      if (hasSidebar() && S.session && !S.sessions.some((r) => r.session_id === S.session.id)) loadSessions(); // first save: it joins the list
     },
     error(ev, ctx) {
       const d = ev.data;
@@ -701,6 +721,7 @@
       if (d.by_user || (d.stopped && S.userStopped)) sysLine(ctx, 'Stopped by you. Any unanswered tool call was closed as "aborted".');
       finishRun(d.error ? 'error' : d.stopped ? 'stopped' : 'done'); // denies stay in the facts line's "N blocked"
       refreshCounts();
+      loadSessions();
     },
   };
 
@@ -774,14 +795,94 @@
     a.card.querySelector('.exp').textContent = '';
   }
 
-  // ================================================================== drawer (code · scenarios · sessions)
+  // ================================================================== sessions sidebar (stage 4: checkpoints in SQLite)
+  const hasSidebar = () => S.view === 'chat' && S.stage >= 4;
+
+  function syncSidebar() {
+    const on = hasSidebar(); const el = $('#sessions');
+    const was = document.body.classList.contains('has-sessions');
+    document.body.classList.toggle('has-sessions', on);
+    el.hidden = !on;
+    if (on && !was) { el.classList.remove('slide'); void el.offsetWidth; el.classList.add('slide'); } // slides in with the chat
+    if (on) { renderSidebar(); loadSessions(); }
+  }
+
+  function when(v) {
+    const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+    if (isNaN(d)) return '';
+    const s = (Date.now() - d) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (new Date().toDateString() === d.toDateString()) return 'today ' + d.toTimeString().slice(0, 5);
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function loadSessions() {
+    if (!hasSidebar() || S.sessLoading) return;
+    S.sessLoading = true;
+    try { S.sessions = await api('/api/sessions'); S.sessErr = ''; } catch (e) { S.sessErr = e.message; } finally { S.sessLoading = false; }
+    renderSidebar();
+  }
+
+  function renderSidebar() {
+    const box = $('#sessList');
+    if (!box) return;
+    const open = S.session ? S.session.id : null;
+    const rows = S.sessions || [];
+    const items = [];
+    if (open && !rows.some((r) => r.session_id === open)) { // the open task has no checkpoints yet
+      items.push(`<li><div class="sess on fresh" aria-current="true"><span class="t">New task</span><small>${esc(open)} · not saved yet</small></div></li>`);
+    }
+    for (const r of rows) {
+      const on = r.session_id === open;
+      const n = r.message_count ?? '?';
+      items.push(`<li><button type="button" class="sess${on ? ' on' : ''}" data-id="${esc(r.session_id)}" data-role="${esc(r.role)}"` +
+        `${on ? ' aria-current="true"' : ''} ${S.running ? 'disabled' : ''} title="${on ? 'Open now' : 'Resume this session from SQLite'}">` +
+        `<span class="t">${esc(r.title || '(untitled)')}</span><small><b>${esc(r.role)}</b> · ${n} msg${n === 1 ? '' : 's'} · ${esc(when(r.updated_at))}</small></button></li>`);
+    }
+    box.innerHTML = items.join('') || '<li class="hint pad">No saved sessions yet.</li>';
+    if (S.sessErr) box.insertAdjacentHTML('beforeend', `<li class="hint pad">Could not load sessions: ${esc(S.sessErr)}</li>`);
+    $('#sessCount').textContent = rows.length ? `${rows.length} saved` : '';
+    $('#newTaskBtn').disabled = S.running;
+    box.querySelectorAll('button[data-id]').forEach((b) => {
+      b.onclick = () => { if (!b.classList.contains('on')) resumeSession(b.dataset.id, b.dataset.role); };
+    });
+  }
+
+  function resetTranscript() {
+    $('#transcript').innerHTML = '';
+    S.turn = null; S.facts = freshFacts(); S.checkpoints = 0;
+    renderStrip(); setStatus('ready');
+  }
+
+  async function resumeSession(id, role) { // a new chat session whose Agent loads its history from SQLite
+    if (S.running || !id) return false;
+    closeDrawer();
+    if (role && S.meta.roles.includes(role)) S.role = role;
+    renderRoles();
+    await dropSession();
+    resetTranscript();
+    try { await ensureSession({ resumeId: id }); } catch (e) { banner('Resume failed: ' + e.message, { bad: true }); return false; } finally { renderFacts(); }
+    loadSessions();
+    return true;
+  }
+
+  async function newTask() {
+    if (S.running) return;
+    await dropSession();
+    resetTranscript();
+    try { await ensureSession(); } catch (e) { banner('Could not start a session: ' + e.message, { bad: true }); }
+    renderEmpty(); renderFacts(); renderSidebar();
+    $('#input').focus();
+  }
+
+  // ================================================================== drawer (code · scenarios)
   function openDrawer(tab) {
     if (S.view !== 'chat') return;
     if (tab) S.drawerTab = tab;
     renderDrawer();
     document.body.classList.add('drawer-open');
     $('#drawer').setAttribute('aria-hidden', 'false');
-    if (S.drawerTab === 'scenarios' && S.stage >= 4) loadSessions();
   }
   function closeDrawer() { document.body.classList.remove('drawer-open'); $('#drawer').setAttribute('aria-hidden', 'true'); }
   const drawerOpen = () => document.body.classList.contains('drawer-open');
@@ -798,69 +899,77 @@
     renderScenarios();
   }
 
+  const isCompact = (sc) => !String(sc.prompt || '').trim(); // a scenario with no prompt is the Compact now button
+
   function renderScenarios() {
     const pane = $('#paneScenarios');
     if (!pane || !S.meta) return;
+    const off = S.running ? 'disabled' : '';
     const cards = scenarios().map((sc, i) => {
       const running = S.scenario && S.scenario.stage === S.stage && S.scenario.idx === i && S.running;
       const done = S.doneScenarios.has(i) && !running;
+      const note = S.scnNote && S.scnNote.stage === S.stage && S.scnNote.idx === i ? `<div class="scn-msg">${esc(S.scnNote.text)}</div>` : '';
       return `<div class="scn${running ? ' running' : ''}${done ? ' done' : ''}"><div class="top"><span class="dot">${done ? '✓' : i + 1}</span>` +
-        `<b>${esc(sc.title)}</b><span class="role">${esc(sc.role)}</span><button class="btn primary small run" type="button" data-i="${i}" ${S.running ? 'disabled' : ''}>Run</button></div>` +
-        `<q>${esc(sc.prompt)}</q><div class="watch"><b>Watch:</b> ${esc(sc.watch)}</div></div>`;
+        `<b>${esc(sc.title)}</b><span class="role">${esc(sc.role)}</span><button class="btn primary small run" type="button" data-i="${i}" ${off}>${isCompact(sc) ? 'Compact now' : 'Run'}</button></div>` +
+        (sc.resume ? '<div class="resume-note">↺ Resumes the latest saved session</div>' : '') +
+        (isCompact(sc) ? '' : `<q>${esc(sc.prompt)}</q>`) + `<div class="watch"><b>Watch:</b> ${esc(sc.watch)}</div>${note}</div>`;
     }).join('');
-    const sessions = S.stage >= 4 ? `<h4>Sessions (SQLite)</h4><div id="sessList" class="hint">Loading…</div>` +
-      `<h4>Compaction</h4><button class="btn small" id="compactBtn" type="button" ${S.running ? 'disabled' : ''}>Compact now</button> ` +
+    const compact = S.stage >= 4 ? `<h4>Compaction</h4><button class="btn small" id="compactBtn" type="button" ${off}>Compact now</button> ` +
       '<span class="hint">Summarizes older turns into one message.</span>' : '';
-    const keep = pane.querySelector('#sessList');
-    pane.innerHTML = `<h4>Scenarios · stage ${S.stage}</h4>${cards || '<p class="hint">No scenarios for this stage.</p>'}${sessions}`;
-    if (keep && pane.querySelector('#sessList')) pane.querySelector('#sessList').replaceWith(keep);
+    pane.innerHTML = `<h4>Scenarios · stage ${S.stage}</h4>${cards || '<p class="hint">No scenarios for this stage.</p>'}${compact}`;
     pane.querySelectorAll('.run').forEach((b) => { b.onclick = () => runScenario(+b.dataset.i); });
     const cb = pane.querySelector('#compactBtn');
-    if (cb) cb.onclick = compactNow;
-  }
-
-  async function loadSessions() {
-    const box = $('#sessList');
-    if (!box) return;
-    try {
-      const rows = await api('/api/sessions');
-      const when = (v) => { const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v); return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
-      box.className = '';
-      box.innerHTML = rows.length ? rows.slice(0, 12).map((r) => `<div class="sess"><div><span>${esc(r.title || '(untitled)')}</span>` +
-        `<small>${esc(r.session_id)} · ${esc(r.role)} · ${r.message_count ?? '?'} msgs · ${when(r.updated_at)}</small></div>` +
-        `<button class="btn small" type="button" data-id="${esc(r.session_id)}" data-role="${esc(r.role)}" ${S.session && S.session.id === r.session_id ? 'disabled' : ''}>Resume</button></div>`).join('')
-        : '<span class="hint">No saved sessions yet.</span>';
-      box.querySelectorAll('button[data-id]').forEach((b) => { b.onclick = () => resume(b.dataset.id, b.dataset.role); });
-    } catch (e) { box.textContent = 'Could not load sessions: ' + e.message; }
-  }
-
-  async function resume(sessionId, role) {
-    if (S.running) return;
-    closeDrawer();
-    if (S.meta.roles.includes(role)) S.role = role;
-    renderRoles();
-    await dropSession();
-    $('#transcript').innerHTML = '';
-    S.facts = freshFacts();
-    try { await ensureSession({ resumeId: sessionId }); } catch (e) { banner('Resume failed: ' + e.message, { bad: true }); }
-    renderFacts();
+    if (cb) cb.onclick = () => compactNow();
   }
 
   async function compactNow() {
-    if (!S.session || S.running) return;
+    if (S.running) return;
+    if (!S.session) { try { await ensureSession(); } catch (e) { banner('Could not start a session: ' + e.message, { bad: true }); return; } }
+    S.running = true; setComposer(); setStatus('thinking'); pulse('persistence');
+    S.turn = newTurn(); // the compaction row lands here when its event arrives
+    let ok = false;
     try {
       const r = await api('/api/compact/' + encodeURIComponent(S.session.key), { method: 'POST' });
-      if (!r.compacted) sysLine(ensureTurn(), 'Nothing compacted: ' + (r.reason || 'not enough history yet.'));
-      S.turn = null;
-    } catch (e) { banner('Compaction failed: ' + e.message, { bad: true }); }
+      ok = !!r.compacted;
+      if (!ok) sysLine(S.turn, 'Nothing compacted: ' + (r.reason || 'not enough history yet.'));
+    } catch (e) { sysLine(S.turn, 'Compaction failed: ' + e.message, true); }
+    S.running = false;
+    setStatus(ok ? 'done' : 'ready');
+    if (S.scenario && S.scenario.stage === S.stage && ok) S.doneScenarios.add(S.scenario.idx);
+    S.scenario = null;
+    setComposer();
+    loadSessions();
+  }
+
+  async function latestSaved() { // most recent saved session of this stage, freshest list from the server
+    try { S.sessions = await api('/api/sessions'); } catch (_) { return null; }
+    renderSidebar();
+    return S.sessions.find((r) => (r.stage == null || Number(r.stage) === S.stage) && (r.message_count ?? 1) > 0) || null;
+  }
+
+  function scenarioNote(i, text) {
+    S.scnNote = { stage: S.stage, idx: i, text };
+    renderScenarios();
+    if (!drawerOpen()) banner(text, { timeout: 4000 });
+    setTimeout(() => { if (S.scnNote && S.scnNote.text === text) { S.scnNote = null; renderScenarios(); } }, 6000);
   }
 
   async function runScenario(i) {
     const sc = scenarios()[i];
     if (!sc || S.running) return;
+    S.scnNote = null;
+    let prev = null;
+    if (sc.resume) {
+      prev = await latestSaved();
+      if (!prev) {
+        const first = scenarios().find((x) => !x.resume && !isCompact(x));
+        return scenarioNote(i, first ? `Run '${first.title}' first` : 'Save a session first');
+      }
+    }
     closeDrawer();
     if (S.view !== 'chat') show('chat');
-    await setRole(sc.role);
+    if (isCompact(sc)) { S.scenario = { stage: S.stage, idx: i }; return compactNow(); }
+    if (prev) { if (!(await resumeSession(prev.session_id, sc.role || prev.role))) return; } else await setRole(sc.role);
     S.scenario = { stage: S.stage, idx: i };
     $('#input').value = sc.prompt;
     send(sc.prompt);
@@ -894,7 +1003,8 @@
     $('#drawerBtn').onclick = toggleDrawer;
     $('#drawerTab').onclick = () => openDrawer();
     $('#drawerClose').onclick = closeDrawer;
-    document.querySelectorAll('.tabs button').forEach((b) => { b.onclick = () => { S.drawerTab = b.dataset.tab; renderDrawer(); if (b.dataset.tab === 'scenarios') loadSessions(); }; });
+    document.querySelectorAll('.tabs button').forEach((b) => { b.onclick = () => { S.drawerTab = b.dataset.tab; renderDrawer(); }; });
+    $('#newTaskBtn').onclick = newTask;
     $('#composer').onsubmit = (e) => { e.preventDefault(); send($('#input').value); };
     $('#stopBtn').onclick = stop;
     $('#transcript').addEventListener('scroll', (e) => { const t = e.target; S.stick = t.scrollHeight - t.scrollTop - t.clientHeight < 140; });

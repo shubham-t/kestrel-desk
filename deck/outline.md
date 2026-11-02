@@ -10,17 +10,17 @@ CallLimit numbers on slide 16 (8 model calls, 10 tool calls per run) are read at
 
 ## Snippet sources
 
-Every code slide is cut at build time by `harness.stages.stage_snippet(s)` from the `# [stage:N]` marker blocks in `harness/*.py` (dedented, verbatim). Over-long lines are soft-wrapped on the slide with a muted ↪; no characters are changed.
+Every code slide is cut at build time by `harness.stages.stage_snippet(s)` from the `# [stage:N]` marker blocks in `harness/*.py` (dedented, verbatim); the one exception is the load_skill slide, whose code is the inner `load_skill` function of `make_load_skill_tool` in harness/context.py, cut with `ast` at build time (also verbatim). Over-long lines are soft-wrapped on the slide with a muted ↪; no characters are changed. Demo slides list `harness.stages.scenarios(s)`: titles, roles and prompts verbatim (two long prompts shortened with …, each cut checked against the real prompt), and a watch line made of exact excerpts of each scenario's `watch` text.
 
 - slide 8: harness/stages.py [stage:0] "A chatbot: a model and a prompt"
-- slide 12: harness/stages.py [stage:1] "Context: company instructions and skills"
-- slide 13: harness/context.py [stage:1] "Skills load on demand"
-- slide 15: harness/tools_company.py [stage:2] "A tool is a typed, documented function"
+- slide 11: harness/stages.py [stage:1] "Context: the company file, always on"
+- slide 13: harness/tools_company.py [stage:2] "A tool is a typed, documented function"
+- slide 15: harness/context.py make_load_skill_tool(): the inner load_skill, verbatim (read with ast at build time)
 - slide 17: harness/subagents.py [stage:2] "A subagent: its own prompt, a subset of tools, a cheaper model"
-- slide 18: harness/stages.py [stage:2] "Actions: tools, a loop with middleware, a subagent"
-- slide 20: harness/middleware.py [stage:3] "Who may use which tool, and what is never writable"
+- slide 18: harness/stages.py [stage:2] "Actions: tools, a loop with middleware, skills on demand, a subagent"
+- slide 20: harness/middleware.py [stage:3] "Who may use which tool"
 - slide 22: harness/tools_company.py [stage:3] "The tool checks what the model might get wrong"
-- slide 23: harness/stages.py [stage:3] "Boundaries: roles, protected paths, human approval, audit"
+- slide 23: harness/stages.py [stage:3] "Boundaries: roles, human approval, audit"
 - slide 26: harness/tools_workspace.py [stage:4] "Writes are confined to workspace/"
 - slide 27: harness/compaction.py [stage:4] "What compaction asks the model to keep"
 - slide 28: harness/stages.py [stage:4] "Persistence: checkpoints, a workspace, compaction"
@@ -109,99 +109,101 @@ Speaker notes: Stage zero is the baseline, and in code it is literally one line:
 **Demo:** Switch to the browser: Stage 0 (Chatbot)
 
 Key points:
-- Does it know us? (sales): It guesses, or admits it doesn't know. Only the Model lights up.
+- Who's Acme? (as sales): "Who is Acme Robotics and when is their renewal due?". Watch: It can't know. Nothing is around the model.
+- Price the renewal (as sales): "Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing.". Watch: It invents a price, or asks for one. It has no idea what our plans cost.
 
-Speaker notes: Switch to the browser, stage 0. Run 'Does it know us?' as sales. The prompt is: What do you know about Kestrel Software and our proposal process? Watch: the model either guesses about Kestrel or admits it doesn't know. Only the Model lights up, nothing else in the strip moves. That's our baseline. Then come back to the slides.
+Speaker notes: Switch to the browser, stage 0. Two runs, both as sales, and this is where the Acme Robotics renewal story starts. First, 'Who's Acme?': Who is Acme Robotics and when is their renewal due? It can't know: nothing is around the model, so it guesses or says it doesn't know. Second, 'Price the renewal': Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing. It invents a price, or asks for one; it has no idea what our plans cost. Remember that prompt: we run it again at stage 1. Then come back to the slides.
 
 ## Stage 1 · Context
 
-### 10. Context: always-on instructions
+### 10. Context we push, on every call
 
 Key points:
 - company/AGENTS.md becomes the system prompt
-- Facts the model can't guess
-- Conventions: tone, format, citations
-- Sent with every call: keep it short
+- Pushed on every call: facts, plans and prices, business rules
+- The request is identical to stage 0 except the system prompt
+- Every line costs tokens on every call: keep it short
 
-Speaker notes: The first component is context: what the model knows before it starts. The cheapest, highest-leverage piece is an always-on instruction file, and we use company/AGENTS.md as the system prompt. It holds the facts the model can't guess, like our plans and prices and who the teams are, and the conventions we want followed. It's about 480 words, and that's on purpose: it's sent on every single call, so every line has to earn its place.
+Speaker notes: The first component is context: what the model knows before it starts. Stage 1 adds exactly one thing: company/AGENTS.md becomes the system prompt. It holds what the model can't guess: who we are, our plans and list prices, and the business rules every answer has to follow, like 'discounts above 10% need written approval from finance'. This is context we push: it rides along on every single call, whether the task needs it or not. Look at the request on the right. Compared to stage 0, nothing changed except the system prompt: same single call, no tools, no loop. The file is about 530 words on purpose, because every line costs tokens every time.
 
-### 11. Context: skills, on demand
-
-Key points:
-- The prompt lists each skill: name + one line
-- The model calls load_skill when it needs one
-- The full SKILL.md enters context only then
-- Why not stuff it all in: cost, distraction, scale
-
-Speaker notes: But you can't put everything in the system prompt. Every token costs on every turn, and rules that don't apply to this task distract the model. So skills are procedures on demand. The prompt only lists each skill's name and its one-line description, straight from the SKILL.md frontmatter. When the model decides it needs one, it calls load_skill, and only then does the full text enter the conversation. That's progressive disclosure: the index is always there, the body only when needed.
-
-### 12. Stage 1 in code
+### 11. Stage 1 in code
 
 Key points:
-- Agent(...) for stage 1; new keywords: instructions, skills
-- AGENTS.md as the prompt; a skills index plus load_skill.
+- Agent(...) for stage 1; new keywords: instructions
+- AGENTS.md is the system prompt. Nothing else about the call changes.
 
-Speaker notes: In code, context is two keywords. instructions points at AGENTS.md; skills points at the skills folder. The harness builds the skills index from each SKILL.md's frontmatter and installs the load_skill tool for us. The loop itself hasn't changed at all. And look at the strip: Context is in, with the orange ring because we just added it.
+Speaker notes: In code, stage 1 is one keyword: instructions, pointing at AGENTS.md. The harness reads the file when the agent is built and sends it as the system prompt. No tools, no skills, no loop yet: it is exactly the stage 0 call with a better system prompt. In the strip, Context is in, with the orange ring because we just added it.
 
-### 13. load_skill is the whole mechanism
-
-Key points:
-- An unknown name raises a ToolError: the model gets the valid names back and can correct itself.
-
-Speaker notes: And this is the tool the harness installs, the real code. It's eight lines. It looks the name up and returns the skill's body. Notice the error path: if the model asks for a skill that doesn't exist, it doesn't crash, it raises a ToolError, and the message goes back to the model with the list of valid names. Errors written for the model to read are a recurring pattern in a good harness.
-
-### 14. → Demo: Stage 1 · Context
+### 12. → Demo: Stage 1 · Context
 
 **Demo:** Switch to the browser: Stage 1 (Context)
 
 Key points:
-- Skill-guided draft (sales): load_skill fires and the draft follows the skill's sections. We still had to explain who Acme is.
+- Price the renewal, again (as sales): "Draft a renewal proposal for Acme Robotics: 40 seats on our Enterprise plan, with pricing.". Watch: Plan-table price ($2,400 per seat per year), our tone, our sections, no discount. Tokens in jumped: AGENTS.md rides on every call.
+- Can I discount? (as sales): "Can I offer Acme 15% off to close this quarter?". Watch: "No: above 10% needs written approval from finance", straight from AGENTS.md. A business rule, not a fact.
 
-Speaker notes: Back to the browser, stage 1. Run 'Skill-guided draft' as sales. The prompt asks it to use the proposal-writing skill to draft a proposal for Acme Robotics: Enterprise plan, 40 seats, they care about SSO and audit logs. You'll see load_skill fire and the Context card pulse, and the draft follows the skill's required sections. But notice we had to tell it who Acme is: it can't look anything up yet. That's the next component.
+Speaker notes: Back to the browser, stage 1, still as sales. First, 'Price the renewal, again': the exact same prompt as stage 0, draft a renewal proposal for Acme Robotics, 40 seats on our Enterprise plan, with pricing. Now the price comes from the plan table, $2,400 per seat per year, in our tone and our sections, with no discount. Look at tokens in on the facts line: it jumped, because AGENTS.md rides on every call. And notice we still had to tell it who Acme is. Second, 'Can I discount?': Can I offer Acme 15% off to close this quarter? No: above 10% needs written approval from finance, straight from AGENTS.md. That's a business rule, not a fact. What it can't do yet is look anything up: that's the next component.
 
 ## Stage 2 · Actions
 
-### 15. A tool is a typed, documented function
+### 13. A tool is a typed, documented function
 
 Key points:
 - @tool turns the type hints and docstring into the schema the model sees. ctx is injected.
 
-Speaker notes: The second component is actions. A tool is just a typed async function with a docstring. This is lookup_customer, exactly as it is in the repo. The @tool decorator reads the type hints and the docstring and generates the JSON schema the model sees; ctx is injected by the harness and never shown to the model. And again, when nothing matches, the error tells the model which customers do exist.
+Speaker notes: AGENTS.md can't hold every customer record, which is why we still had to say who Acme is. So the second component is actions: the model fetches facts itself. A tool is just a typed async function with a docstring. This is lookup_customer, exactly as it is in the repo. The @tool decorator reads the type hints and the docstring and generates the JSON schema the model sees; ctx is injected by the harness and never shown to the model. It takes an id or part of a name. And when nothing matches, the error is written for the model: it points at list_customers instead of letting it guess.
+
+### 14. Skills: an index now, the body on demand
+
+Key points:
+- Stage 1 pushed AGENTS.md on every call; skills are context the model pulls
+- The prompt lists each skill: name + one line
+- The model calls load_skill when a task needs one
+- The full SKILL.md enters context only then
+
+Speaker notes: Stage 1 was context we push: AGENTS.md rides on every call. That doesn't scale to every playbook we have. So at stage 2, next to the tools that pull facts, we add context the model pulls: skills. The prompt only lists each skill's name and its one-line description, straight from the SKILL.md frontmatter. When a task needs one, the model calls load_skill, and only then does the full text enter the conversation. That's progressive disclosure: cheaper, less distracting, and it scales. It needs the loop, a tool call and then another model call, which is why it arrives here and not at stage 1.
+
+### 15. load_skill is the whole mechanism
+
+Key points:
+- An unknown name raises a ToolError: the model gets the valid names back and can correct itself.
+
+Speaker notes: And this is the tool the skills keyword installs, the real code from context.py. It's a closure over the discovered skills: look the name up, return the body. Notice the error path: if the model asks for a skill that doesn't exist, nothing crashes; it raises a ToolError, and the message goes back to the model with the list of valid names. Errors written for the model to read are a recurring pattern in a good harness.
 
 ### 16. Actions: middleware in the loop
 
 Key points:
 - Small objects the loop calls at fixed points
 - Hooks: before_model, after_model, before_tool, after_tool
-- CallLimit: stops runaway loops
-- TodoTracker: a visible plan via update_todos
+- CallLimit: 8 model calls and 10 tool calls per run
+- TodoTracker-style planning: one more middleware you could add
 
-Speaker notes: Once the model can act, we need a place to put rules about acting. Middleware is a small object the loop calls at fixed points: before and after each model call, and before and after each tool call. Two ship in stage 2. CallLimit counts calls, 8 model calls and 10 tool calls per run, and stops a runaway loop with a reason. TodoTracker gives the model an update_todos tool, so long tasks stay organized and we can watch its plan. Everything in the next stage, boundaries, is middleware too.
+Speaker notes: A loop that keeps calling tools needs a brake, and the place for rules about acting is middleware: a small object the loop calls at fixed points, before and after each model call and before and after each tool call. Stage 2 ships exactly one: CallLimit, a budget of 8 model calls and 10 tool calls per run. Past it, the call is denied or the run stops, always with a reason the model can report. Planning in the style of TodoTracker, an update_todos tool and a plan you can watch in the UI, is one more middleware you could add the same way. And everything in the next stage, boundaries, is middleware too.
 
 ### 17. A subagent is a definition
 
 Key points:
-- Own prompt, one tool, a cheaper model, a clean context. Only its checklist comes back.
+- Own prompt, a subset of tools, a cheaper model, a clean context. Only its checklist comes back.
 
 Speaker notes: Some work is better done in a separate room. A subagent has its own prompt, its own small set of tools, and runs on a cheaper model, here the subagent model from .env. It starts with a clean context, does its job, and hands back only a summary, so the main conversation doesn't fill up with its working. Our proposal-reviewer checks a draft against the customer record and returns three headings: Supported, Unsupported, Missing. It's just data; the harness turns it into a run_subagent tool.
 
 ### 18. Stage 2 in code
 
 Key points:
-- Agent(...) for stage 2; new keywords: tools, middleware, subagents
-- Company tools, two middlewares, one subagent.
+- Agent(...) for stage 2; new keywords: tools, middleware, skills, subagents
+- Company tools, a call budget, skills on demand, one subagent.
 
-Speaker notes: Three new keywords: tools, middleware and subagents. The loop that runs tool calls was always there; now it finally has something to do. Notice the subagent is just the definition we saw, and the harness turns it into a run_subagent tool the main agent can call. In the strip, Context is blue and Actions has the orange ring.
+Speaker notes: Four new keywords: tools, middleware, skills and subagents. The loop that runs tool calls was always there; now it finally has something to do. skills installs the index and load_skill, subagents turns the reviewer definition into a run_subagent tool, and the only middleware is CallLimit. In the strip, Context is blue and Actions has the orange ring.
 
 ### 19. → Demo: Stage 2 · Actions
 
 **Demo:** Switch to the browser: Stage 2 (Actions)
 
 Key points:
-- Look it up yourself (sales): lookup_customer, a todo list, then the reviewer's nested check.
-- Runaway loop (engineering): CallLimit stops the run and says why.
+- Prepare the renewal (as sales): "Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the proposal-reviewer check it before you show it to me.". Watch: load_skill pulls the playbook, lookup_customer and lookup_issue pull the facts, the reviewer runs as a nested subagent.
+- Account health, every customer (as engineering): "Give me an account health report for every customer: their record plus their open issues.". Watch: CallLimit denies the 11th tool call; the model reports partial results and says why.
 
-Speaker notes: Stage 2, two runs. First, 'Look it up yourself' as sales: draft a proposal for Acme Robotics and have the proposal-reviewer check it. Watch lookup_customer fire, the todo list appear, and the proposal-reviewer's nested card. Then switch the role to engineering and run 'Runaway loop'. The prompt basically asks it never to stop: for every open issue look up its customer, then every other issue, and check everything twice. CallLimit stops it with a clear reason.
+Speaker notes: Stage 2, two runs. First, as sales, 'Prepare the renewal': Prepare Acme Robotics' renewal proposal: check their record and open issues, then have the proposal-reviewer check it before you show it to me. Watch load_skill pull the proposal playbook, lookup_customer and lookup_issue pull the facts, and the reviewer run as a nested subagent row. This time we never said who Acme is: the model fetched what it needed. Then switch the role to engineering and run 'Account health, every customer': Give me an account health report for every customer: their record plus their open issues. A realistic over-sized request: CallLimit denies the 11th tool call, and the model reports partial results and says why.
 
 ## Stage 3 · Boundaries
 
@@ -210,43 +212,40 @@ Speaker notes: Stage 2, two runs. First, 'Look it up yourself' as sales: draft a
 Key points:
 - A rule in the prompt is a suggestion. A rule in code is a guarantee.
 
-Speaker notes: Third component: boundaries. Each role gets a set of tools; that's the ROLE_TOOLS table, real code. Sales can send proposals, engineering can look up issues, finance can see revenue. RoleGate checks that set before every tool call. And PROTECTED_PATHS lists what is never writable: the company files, the skills, and the harness's own code. This lives in code, not in the prompt. A prompt that says 'please don't' is a suggestion the model may or may not follow; a denied call is a guarantee. And the model gets the reason back, so it can explain instead of guessing.
+Speaker notes: Third component: boundaries. Each role gets a set of tools; that's the ROLE_TOOLS table, real code. Sales can send proposals, engineering can look up issues, finance can see revenue. RoleGate checks that set before every tool call. This lives in code, not in the prompt. A prompt that says 'please don't' is a suggestion the model may or may not follow; a denied call is a guarantee. And the model gets the reason back, so it can explain instead of guessing.
 
 ### 21. Boundaries: the permission chain
 
 Key points:
-- RoleGate → ProtectedPaths → ApprovalGate → yours → AuditLog
+- RoleGate → ApprovalGate → CallLimit → AuditLog
 - First deny wins
 - ask beats allow: the loop waits for a human
 - Every outcome lands in the audit log
 
-Speaker notes: Every tool call runs through the same chain, in order: RoleGate, protected paths, the approval gate, then the rest of the middleware like CallLimit, and after the tool runs the audit log records the outcome. Each gate answers allow, ask or deny. The first deny wins. An ask beats an allow: the loop pauses and waits for a human to approve or reject. You'll see these decisions spelled out in the demo's event rows.
+Speaker notes: Every tool call runs through the same chain, in order: RoleGate checks the role, the ApprovalGate decides whether a human has to say yes, then your own middleware, here CallLimit from stage 2, and after the tool runs the AuditLog writes one line with the outcome. Each gate answers allow, ask or deny. The first deny wins. An ask beats an allow: the loop pauses and waits for a human to approve or reject. Each box comes from one keyword, shown at the bottom of the card. You'll see these decisions spelled out in the demo's event rows.
 
 ### 22. The tool checks, too
-
-Key points:
-- undefined
 
 Speaker notes: Boundaries aren't only middleware. Here's send_proposal, the real code. It's marked as needing approval, so a human sees a card before it runs. And the tool itself refuses an email address that isn't the contact on record. Defense in depth: the model might hallucinate an address, the human might click approve too fast, the tool still says no. And it never sends a real email; it writes a file to the outbox. The arrows mark lines that wrap on the slide; in the source they're one line.
 
 ### 23. Stage 3 in code
 
 Key points:
-- Agent(...) for stage 3; new keywords: permissions, approve, protected_paths, audit
+- Agent(...) for stage 3; new keywords: permissions, approve, audit
 - Same tools as stage 2; now they run under rules.
 
-Speaker notes: Four keywords: permissions, approve, protected_paths and audit. Notice what didn't change: the tools. send_proposal is the same function it was in stage 2; we just told the harness it needs a human. Boundaries now has the orange ring in the strip.
+Speaker notes: Three keywords: permissions, approve and audit. Notice what didn't change: the tools. send_proposal is the same function it was in stage 2; we just told the harness it needs a human. Boundaries now has the orange ring in the strip.
 
 ### 24. → Demo: Stage 3 · Boundaries
 
 **Demo:** Switch to the browser: Stage 3 (Boundaries)
 
 Key points:
-- Wrong role (engineering): RoleGate denies get_revenue. The model says so, no guessing.
-- Right role (finance): Same question, allowed, answered with record ids.
-- Needs a human (sales): An approval card. Approve: an outbox file and an audit line.
+- Wrong role (as engineering): "What was our revenue in FY2026?". Watch: RoleGate denies get_revenue, in code, before it runs
+- Right role (as finance): "What was our revenue in FY2026?". Watch: Same question, allowed, answered with record ids.
+- Send it (as sales): "Draft a short renewal proposal for Acme Robotics (…) and send it to procurement@acme-robotics.example with the subject "Kestrel renewal proposal".". Watch: The approval card appears and the loop waits. Approve → outbox file + audit line.
 
-Speaker notes: Stage 3, three runs. As engineering, ask: What was our revenue in FY2026? RoleGate denies get_revenue, and the model says so instead of guessing. Same question as finance: answered, with record ids. Then as sales, send the Acme Robotics proposal to ceo@acme-robotics.example with the subject Kestrel Enterprise proposal. An approval card appears, and the Boundaries card says waiting on you. Approve it and a file lands in the outbox, never a real email, plus an audit line. If the address isn't the contact on record, the tool itself rejects it.
+Speaker notes: Stage 3, three runs. As engineering, 'Wrong role': What was our revenue in FY2026? RoleGate denies get_revenue in code, before it runs, and the model says so instead of guessing. 'Right role': the same question as finance, allowed, answered with record ids. Then as sales, 'Send it': draft a short renewal proposal for Acme Robotics and send it to procurement@acme-robotics.example with the subject Kestrel renewal proposal. The approval card appears and the loop waits; the Boundaries card says waiting on you. Approve, and a file lands in the outbox, never a real email, plus an audit line. Variant if there's time: ask it to send to ceo@acme-robotics.example instead, and the tool itself rejects the address as not on record.
 
 ## Stage 4 · Persistence
 
@@ -254,18 +253,18 @@ Speaker notes: Stage 3, three runs. As engineering, ask: What was our revenue in
 
 Key points:
 - Every message checkpointed to SQLite
-- List sessions; resume one tomorrow
-- workspace/: the one folder it may write
-- Writes elsewhere are blocked
+- New in the demo: a Sessions sidebar (list, click to resume, New task)
+- workspace/: the one folder the file tools write to
+- Any path outside it is refused by the tool itself
 
-Speaker notes: Fourth component: persistence. Until now, history lived in memory, so restart the server and it's gone. Now every message is checkpointed to SQLite, so you can list sessions and resume one tomorrow exactly where you left off. The agent also gets a workspace folder, the one place it may write files. Everything else, company files, skills, the harness code, stays protected by the boundaries we just added.
+Speaker notes: Fourth component: persistence. Until now history lived in memory: restart the server and it's gone. Now every message is checkpointed to SQLite. In the demo that shows up as something new: a Sessions sidebar to the left of the chat, with the saved sessions newest first. Click one and it resumes in place, or press New task to start fresh. The agent also gets a workspace folder with three file tools, and it's the only place they write: the tools themselves refuse any path outside workspace/, so the company files, the skills and the harness code stay untouched.
 
 ### 26. Writes are confined to workspace/
 
 Key points:
 - The path is resolved first, then checked. "../" can't climb out.
 
-Speaker notes: Here's the write tool, real code. The interesting line is the comment: the path is resolved and then checked with is_relative_to, so tricks like dot-dot-slash end there. Combined with ProtectedPaths from stage 3, there are two independent checks between the model and the files we care about.
+Speaker notes: Here's the write tool, real code. The interesting line is the comment: the path is resolved and then checked with is_relative_to, so tricks like dot-dot-slash end there. The confinement lives in the tool itself, not in the prompt and not in a middleware: whatever the model asks for, a path outside workspace/ is refused, and the model gets the reason back. That's exactly what you'll see when the demo asks it to edit AGENTS.md.
 
 ### 27. Persistence: compaction
 
@@ -287,13 +286,14 @@ Speaker notes: Three keywords: checkpointer, workspace and compaction. That's th
 
 ### 29. → Demo: Stage 4 · Persistence
 
-**Demo:** Switch to the browser: Stage 4 (Persistence)
+**Demo:** Switch to the browser: Stage 4 (Persistence); the Sessions sidebar appears left of the chat
 
 Key points:
-- Save it (sales): write_workspace_file and checkpoints tick up. Then try writing company/AGENTS.md.
-- Come back tomorrow (sales): Resume the session: it answers from history. Then press Compact now.
+- Save the draft (as sales): "Draft a short renewal proposal for Acme Robotics (…), save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md …". Watch: write_workspace_file writes the draft and checkpoints tick up … the AGENTS.md write is refused by the tool (outside workspace/)
+- Pick up yesterday's work (as sales, resumes the latest saved session): "Where did we leave off with Acme, and what did we save?". Watch: Run resumes the most recent saved session from SQLite (the divider says so) and answers from history. In the sidebar the session is highlighted.
+- Long day (as sales): no prompt, press Compact now. Watch: 9 → 7 messages, a compaction row with the summary.
 
-Speaker notes: Stage 4. As sales, ask it to save the Acme proposal we discussed as workspace/acme-proposal.md. Watch the Persistence card and the checkpoint counter. Then ask it to write to company/AGENTS.md and see it blocked. Open the drawer, go to Sessions, resume the session, and ask: What did we save earlier, and what was in it? It answers from history without re-reading anything. Finally hit Compact now and look for the summary marker under the strip.
+Speaker notes: Stage 4, and the first thing to notice is the new Sessions sidebar sliding in to the left of the chat: saved sessions from SQLite, newest first, and a New task button. Three runs, all as sales. 'Save the draft': draft a short renewal proposal for Acme Robotics, save it as workspace/acme-renewal.md, and add a line to company/AGENTS.md saying the Acme draft is done. write_workspace_file writes the draft and the checkpoint counter ticks up; the AGENTS.md write is refused by the tool, because it is outside workspace/, and the model reports it. 'Pick up yesterday's work': Run resumes the most recent saved session from SQLite, the divider says so, and the session is highlighted in the sidebar; then it asks: Where did we leave off with Acme, and what did we save? It answers from history. You can also just click any session in the sidebar. 'Long day': no prompt, press Compact now in the drawer: 9 messages become 7, with a compaction row holding the summary.
 
 ## Wrap-up
 

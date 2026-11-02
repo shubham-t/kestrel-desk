@@ -15,7 +15,6 @@ from .events import Event
 from .compaction import COMPACTION_PROMPT, Compactor
 from .middleware_base import ALLOW, Decision, Middleware, StopRun
 from .tools import update_todos
-from .tools_workspace import workspace_target
 
 if TYPE_CHECKING:
     from .events import RunContext
@@ -55,15 +54,12 @@ class TodoTracker(Middleware):
             ctx.emit(Event("todo_update", {"items": ctx.state.get("todos", [])}, component=self.component))
 
 
-# [stage:3] Who may use which tool, and what is never writable
+# [stage:3] Who may use which tool
 ROLE_TOOLS: dict[str, set[str]] = {
-    "sales":       {"lookup_customer", "send_proposal"},
-    "engineering": {"lookup_customer", "lookup_issue"},
-    "finance":     {"lookup_customer", "get_revenue"},
+    "sales":       {"list_customers", "lookup_customer", "send_proposal"},
+    "engineering": {"list_customers", "lookup_customer", "lookup_issue"},
+    "finance":     {"list_customers", "lookup_customer", "get_revenue"},
 }
-
-PROTECTED_PATHS = [config.COMPANY_DIR, config.SKILLS_DIR,
-                   config.REPO_ROOT / "harness", config.REPO_ROOT / "app"]
 # [/stage:3]
 
 
@@ -82,29 +78,6 @@ class RoleGate(Middleware):
             # Permissions are enforced here, in code, not in the prompt.
             return Decision("deny", f"Role '{ctx.role}' is not allowed to use {tool.name}. "
                                     f"Allowed: {', '.join(sorted(allowed)) or 'none'}.")
-        return ALLOW
-
-
-class ProtectedPaths(Middleware):
-    """Writes may only land in workspace/, and never in company, skills or harness code."""
-
-    name, component = "ProtectedPaths", "boundaries"
-
-    def __init__(self, paths: list[Path] | None = None):
-        self.paths = [Path(p).resolve() for p in (paths or PROTECTED_PATHS)]
-
-    async def before_tool(self, call, tool, ctx):
-        raw = call.arguments.get("path")
-        if tool.read_only or not isinstance(raw, str):
-            return ALLOW
-        # Check every place the path could land: as given (from the repo root) and inside workspace/.
-        candidates = [(config.REPO_ROOT / raw).resolve(), workspace_target(raw)]
-        for target in candidates:
-            for protected in self.paths:
-                if target.is_relative_to(protected):
-                    return Decision("deny", f"'{raw}' is under protected path {protected.name}/.")
-        if not workspace_target(raw).is_relative_to(config.WORKSPACE_DIR.resolve()):
-            return Decision("deny", f"'{raw}' is outside workspace/, the only writable folder.")
         return ALLOW
 
 
@@ -147,5 +120,5 @@ class AuditLog(Middleware):
         ctx.emit(Event("audit", record, component=self.component))
 
 
-__all__ = ["Decision", "StopRun", "Middleware", "CallLimit", "TodoTracker", "RoleGate", "ProtectedPaths",
-           "ApprovalGate", "AuditLog", "Compactor", "COMPACTION_PROMPT", "ROLE_TOOLS", "PROTECTED_PATHS"]
+__all__ = ["Decision", "StopRun", "Middleware", "CallLimit", "TodoTracker", "RoleGate",
+           "ApprovalGate", "AuditLog", "Compactor", "COMPACTION_PROMPT", "ROLE_TOOLS"]

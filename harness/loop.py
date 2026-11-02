@@ -46,16 +46,14 @@ class Agent:
     def __init__(self, *, model: LLM | str | None = None, instructions: str | Path = DEFAULT_INSTRUCTIONS,
                  skills: Path | None = None, tools: list[Tool] = (), middleware: list[Middleware] = (),
                  subagents: list[SubagentDef] = (), permissions: dict[str, set[str]] | None = None,
-                 approve: set[str] | None = None, protected_paths: list[Path] | None = None,
-                 audit: bool = False, checkpointer: SessionStore | None = None,
+                 approve: set[str] | None = None, audit: bool = False, checkpointer: SessionStore | None = None,
                  workspace: Path | None = None, compaction: Compactor | None = None,
                  role: str = "sales", session_id: str | None = None,
                  approvals: ApprovalBroker | None = None, stage: int = 0):
         self.llm: LLM = make_llm(model) if model is None or isinstance(model, str) else model
         harness = assemble(llm=self.llm, role=role, instructions=instructions, skills=skills,
                            tools=list(tools), middleware=list(middleware), subagents=list(subagents),
-                           permissions=permissions, approve=approve, protected_paths=protected_paths,
-                           audit=audit, workspace=workspace, compaction=compaction)
+                           permissions=permissions, approve=approve, audit=audit, workspace=workspace, compaction=compaction)
         self.system_prompt = harness.system_prompt
         self.tools = harness.tools
         self.middlewares = harness.middlewares
