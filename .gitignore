@@ -1,0 +1,11 @@
+# local secrets and runtime state: never commit
+.env
+.venv/
+.harness_state/
+workspace/*
+!workspace/.gitkeep
+
+# Python / pytest caches
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,9 @@
+# Kestrel Desk: pinned to the versions this project was built and tested with (Python 3.12).
+# The harness itself only needs openai + python-dotenv; the rest is the web app and tests.
+openai==3.42.1
+python-dotenv==1.2.4
+fastapi==0.162.0
+uvicorn[standard]==0.54.0
+httpx==0.28.1          # fastapi.testclient, used by scripts/verify_offline.py
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1

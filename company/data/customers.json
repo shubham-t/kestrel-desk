@@ -1,0 +1,86 @@
+[
+  {
+    "id": "cust_acme",
+    "name": "Acme Robotics",
+    "industry": "Industrial automation",
+    "plan": "Growth",
+    "seats": 25,
+    "arr_usd": 54000,
+    "contact_name": "Dana Whitfield",
+    "contact_email": "procurement@acme-robotics.example",
+    "renewal_date": "2027-03-31",
+    "notes": "Evaluating an upgrade to the Enterprise plan for 40 seats. Security review requires SAML SSO and exportable audit logs. Asked about a multi-year discount (not approved). Procurement is the contact for all proposals."
+  },
+  {
+    "id": "cust_northwind",
+    "name": "Northwind Freight",
+    "industry": "Logistics",
+    "plan": "Enterprise",
+    "seats": 120,
+    "arr_usd": 288000,
+    "contact_name": "Luis Ortega",
+    "contact_email": "it-admin@northwind-freight.example",
+    "renewal_date": "2026-12-15",
+    "notes": "Largest account. Open S1 on SSO login loops is a renewal risk; exec sponsor wants weekly status until it is resolved."
+  },
+  {
+    "id": "cust_blueharbor",
+    "name": "Blue Harbor Health",
+    "industry": "Healthcare",
+    "plan": "Enterprise",
+    "seats": 85,
+    "arr_usd": 204000,
+    "contact_name": "Priya Raman",
+    "contact_email": "vendor-mgmt@blueharbor-health.example",
+    "renewal_date": "2027-06-30",
+    "notes": "Signed BAA on file. Data must stay in the US region. Interested in the Insights add-on next fiscal year."
+  },
+  {
+    "id": "cust_lumen",
+    "name": "Lumen Grove Education",
+    "industry": "Education",
+    "plan": "Starter",
+    "seats": 12,
+    "arr_usd": 9600,
+    "contact_name": "Marcus Bell",
+    "contact_email": "ops@lumengrove.example",
+    "renewal_date": "2027-01-31",
+    "notes": "Small nonprofit school network. Budget-constrained; renewal usually decided in January."
+  },
+  {
+    "id": "cust_ironbark",
+    "name": "Ironbark Mining Co",
+    "industry": "Mining",
+    "plan": "Growth",
+    "seats": 40,
+    "arr_usd": 86400,
+    "contact_name": "Hannah Cole",
+    "contact_email": "it@ironbark-mining.example",
+    "renewal_date": "2027-02-28",
+    "notes": "Remote sites with poor connectivity; offline sync performance matters more than features."
+  },
+  {
+    "id": "cust_pinecrest",
+    "name": "Pinecrest Credit Union",
+    "industry": "Financial services",
+    "plan": "Enterprise",
+    "seats": 60,
+    "arr_usd": 144000,
+    "contact_name": "Omar Haddad",
+    "contact_email": "security@pinecrest-cu.example",
+    "renewal_date": "2027-09-30",
+    "notes": "Strict change-management: needs 30 days notice before any release that changes the admin console."
+  },
+  {
+    "id": "cust_tidewater",
+    "name": "Tidewater Studios",
+    "industry": "Media",
+    "plan": "Growth",
+    "seats": 18,
+    "arr_usd": 38880,
+    "contact_name": "Elena Sato",
+    "contact_email": "studio-ops@tidewater-studios.example",
+    "renewal_date": "2026-11-30",
+    "notes": "Renewal this month. Happy with the product; asked for a quote to add 10 seats."
+  }
+]

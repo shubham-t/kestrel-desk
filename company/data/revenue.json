@@ -1,0 +1,104 @@
+{
+  "source": "Synthetic FP&A export for the fictional Kestrel Software (demo data only). Fiscal year runs Oct 1 - Sep 30; FY2026 ended 2026-09-30.",
+  "currency": "USD",
+  "quarters": [
+    {
+      "id": "rev-FY2025-Q1",
+      "period": "FY2025-Q1",
+      "by_product_line": {
+        "Desk Core": 4620000,
+        "Insights": 1180000,
+        "Connect": 640000,
+        "Services": 410000
+      },
+      "total": 6850000
+    },
+    {
+      "id": "rev-FY2025-Q2",
+      "period": "FY2025-Q2",
+      "by_product_line": {
+        "Desk Core": 4763000,
+        "Insights": 1248000,
+        "Connect": 668000,
+        "Services": 415000
+      },
+      "total": 7094000
+    },
+    {
+      "id": "rev-FY2025-Q3",
+      "period": "FY2025-Q3",
+      "by_product_line": {
+        "Desk Core": 4911000,
+        "Insights": 1321000,
+        "Connect": 698000,
+        "Services": 420000
+      },
+      "total": 7350000
+    },
+    {
+      "id": "rev-FY2025-Q4",
+      "period": "FY2025-Q4",
+      "by_product_line": {
+        "Desk Core": 5063000,
+        "Insights": 1397000,
+        "Connect": 728000,
+        "Services": 425000
+      },
+      "total": 7613000
+    },
+    {
+      "id": "rev-FY2026-Q1",
+      "period": "FY2026-Q1",
+      "by_product_line": {
+        "Desk Core": 5220000,
+        "Insights": 1479000,
+        "Connect": 760000,
+        "Services": 430000
+      },
+      "total": 7889000
+    },
+    {
+      "id": "rev-FY2026-Q2",
+      "period": "FY2026-Q2",
+      "by_product_line": {
+        "Desk Core": 5382000,
+        "Insights": 1564000,
+        "Connect": 794000,
+        "Services": 435000
+      },
+      "total": 8175000
+    },
+    {
+      "id": "rev-FY2026-Q3",
+      "period": "FY2026-Q3",
+      "by_product_line": {
+        "Desk Core": 5549000,
+        "Insights": 1655000,
+        "Connect": 829000,
+        "Services": 440000
+      },
+      "total": 8473000
+    },
+    {
+      "id": "rev-FY2026-Q4",
+      "period": "FY2026-Q4",
+      "by_product_line": {
+        "Desk Core": 5721000,
+        "Insights": 1751000,
+        "Connect": 865000,
+        "Services": 446000
+      },
+      "total": 8783000
+    }
+  ],
+  "arr_by_plan": {
+    "id": "arr-2026-09-30",
+    "as_of": "2026-09-30",
+    "plans": {
+      "Starter": 2140000,
+      "Growth": 9860000,
+      "Enterprise": 18420000
+    },
+    "total": 30420000
+  }
+}
