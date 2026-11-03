@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kestrel Desk</title>
+  <link rel="stylesheet" href="/static/chat.css">
+</head>
+<body>
+  <div class="page" id="page">
+    <aside class="sessions" id="sessions" hidden>
+      <div class="sessions-head">
+        <h2>Past sessions</h2>
+        <button type="button" class="link" id="new-chat">New chat</button>
+      </div>
+      <ul id="session-list"></ul>
+      <button type="button" class="link compact" id="compact">Compact now</button>
+    </aside>
+
+    <main class="window">
+      <header class="head">
+        <div>
+          <h1>Kestrel Desk</h1>
+          <div class="stage" id="stage">Connecting…</div>
+        </div>
+        <label class="role">Role
+          <select id="role">
+            <option value="sales">Sales</option>
+            <option value="engineering">Engineering</option>
+            <option value="finance">Finance</option>
+          </select>
+        </label>
+      </header>
+
+      <section class="log" id="log" aria-live="polite"></section>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <textarea id="input" rows="2" placeholder="Message Kestrel Desk…"></textarea>
+        <button type="submit" id="send">Send</button>
+        <button type="button" id="stop" hidden>Stop</button>
+      </form>
+    </main>
+  </div>
+  <script src="/static/chat.js"></script>
+</body>
+</html>

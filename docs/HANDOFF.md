@@ -105,7 +105,7 @@ Browser full screen, `P` for presenter mode. Keys: `→`/`←` change stage, `En
 chat, `/` opens the code-and-scenarios drawer, `1`–`3` switch role, `Esc` closes or stops.
 
 For each stage: the "Add stage" screen (problem, component cards, the `Agent(...)` call with
-new keywords marked) → **Open the chat** → `/` → **Scenarios** → **Run**. The 13 scenarios
+new keywords marked) → **Open the chat** → `/` → **Scenarios** → **Run**. The 12 scenarios
 tell one story, the Acme Robotics renewal (full table in `README.md`, "Scenarios"). Stage 3's
 "Send it" pauses on an approval card: click **Approve and send**. Stage 4 shows the sessions
 sidebar; "Pick up yesterday's work" resumes the saved session by itself; "Long day" is the
@@ -113,6 +113,15 @@ sidebar; "Pick up yesterday's work" resumes the saved session by itself; "Long d
 
 Before the talk: delete `.harness_state\` (sessions, audit log, outbox) and everything in
 `workspace\` except `.gitkeep`, so the sidebar and the workspace start empty.
+
+**Alternative: the notebook version.** If the presenter wants the format of the reference
+video instead, `notebooks/kestrel_desk.ipynb` runs the same five stages as notebook cells (each
+stage cell is the `Agent(...)` call from `stages.py`), and its `serve(build_stage_N, stage=N)`
+cells point a plain chat window at http://127.0.0.1:8777 (`chatwin/`: a chat, a role dropdown,
+tool-call lines, an approval box, and at stage 4 a Past sessions column). The rhythm is: run the
+stage cell, run `serve(...)`, refresh the window, paste the prompt from `chatwin/PROMPTS.md`.
+It needs `pip install -r requirements-notebook.txt`; everything else (the `.env`, the
+before-the-talk cleanup) is the same. Details: `notebooks/README.md`.
 
 ## 6. Do not change these
 

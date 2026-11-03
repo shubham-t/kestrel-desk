@@ -56,6 +56,21 @@ Remove-Item Env:KESTREL_MOCK      # back to the real model
 
 The top bar shows `MOCK · REHEARSAL` instead of `LIVE · <model>`, so you always know which one is up.
 
+## Notebook version
+
+A second format, closer to the reference video: `notebooks/kestrel_desk.ipynb` has one code
+cell per stage (the same `Agent(...)` call as `harness/stages.py`), and a plain chat window
+(`chatwin/`, http://127.0.0.1:8777) that the notebook points at each stage with
+`serve(build_stage_N, stage=N)`; you refresh the window after each stage. Prompts are in
+`chatwin/PROMPTS.md`. Setup, the refresh rhythm and the offline fake model:
+[`notebooks/README.md`](notebooks/README.md).
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements-notebook.txt
+.venv\Scripts\python -m jupyter lab notebooks\kestrel_desk.ipynb
+.venv\Scripts\python -m chatwin --stage 3      # the chat window alone, no notebook
+```
+
 ## Point it at another OpenAI-compatible endpoint (edit `.env` only)
 
 Nothing outside `harness/llm.py` knows which provider is behind the URL, and `llm.py` reads

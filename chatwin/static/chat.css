@@ -1,0 +1,125 @@
+/* Plain chat window: light, system fonts, nothing loaded from the network. */
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --ink: #1d2330;
+  --muted: #6b7280;
+  --line: #e3e6eb;
+  --user: #2f5bd3;
+  --user-ink: #ffffff;
+  --bot: #f1f3f6;
+  --ok: #1f8a4c;
+  --bad: #c62828;
+  --bad-bg: #fdecec;
+  --warn-bg: #fff7e0;
+  --warn-line: #e8c35a;
+  --code: #eef0f4;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+[hidden] { display: none !important; }
+
+.page { display: flex; justify-content: center; gap: 20px; height: 100vh; padding: 20px 16px; }
+.window {
+  width: 860px; max-width: 100%; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+}
+
+.head {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 22px; border-bottom: 1px solid var(--line);
+}
+.head h1 { margin: 0; font-size: 1.3rem; font-weight: 650; }
+.stage { color: var(--muted); font-size: 0.9rem; }
+.stage .mock { color: #9a6700; font-weight: 600; }
+.role { color: var(--muted); font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+select, textarea, button { font: inherit; color: inherit; }
+select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+
+.log { flex: 1; overflow-y: auto; padding: 20px 22px; display: flex; flex-direction: column; gap: 10px; }
+.empty { color: var(--muted); text-align: center; margin: auto; }
+
+.msg { max-width: 82%; padding: 10px 14px; border-radius: 14px; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--user); color: var(--user-ink); white-space: pre-wrap; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: var(--bot); border-bottom-left-radius: 4px; }
+.msg.bot.streaming { white-space: pre-wrap; }
+.msg.bot > :first-child { margin-top: 0; }
+.msg.bot > :last-child { margin-bottom: 0; }
+.msg.bot p, .msg.bot ul, .msg.bot ol { margin: 0.4em 0; }
+.msg.bot ul, .msg.bot ol { padding-left: 1.3em; }
+.msg.bot h3, .msg.bot h4 { margin: 0.7em 0 0.3em; font-size: 1.02rem; }
+.msg.bot code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 0.88em; }
+.msg.bot pre { background: var(--code); padding: 8px 10px; border-radius: 6px; overflow-x: auto; font-size: 0.85em; }
+.msg.bot pre code { background: none; padding: 0; }
+.msg.bot hr { border: 0; border-top: 1px solid var(--line); margin: 0.8em 0; }
+.table-wrap { overflow-x: auto; margin: 0.5em 0; }
+.msg.bot table { border-collapse: collapse; font-size: 0.92em; background: #fff; }
+.msg.bot th, .msg.bot td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; vertical-align: top; }
+.msg.bot th { background: #e9ecf1; font-weight: 600; }
+
+.tool {
+  align-self: flex-start; margin-left: 18px; font: 0.86rem/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: calc(100% - 18px);
+}
+.tool.sub { margin-left: 44px; max-width: calc(100% - 44px); }
+.tool .name { color: var(--ink); font-weight: 600; }
+.tool .mark.ok { color: var(--ok); }
+.tool.bad { color: var(--bad); white-space: normal; }
+.tool.bad .name { color: var(--bad); }
+.tool .reason { display: block; margin-left: 1.2em; }
+.tool.agent .name { color: #6b4fbb; }
+
+.note { align-self: center; color: var(--muted); font-size: 0.85rem; text-align: center; }
+.note.divider { width: 100%; border-top: 1px dashed var(--line); padding-top: 6px; }
+.note.err { color: var(--bad); }
+.note details { text-align: left; }
+
+.approval {
+  align-self: flex-start; margin-left: 18px; max-width: 80%;
+  border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: 10px; padding: 10px 14px;
+}
+.approval .title { font-weight: 600; }
+.approval .meta { font-size: 0.9rem; color: var(--muted); margin: 2px 0 8px; }
+.approval pre { white-space: pre-wrap; font-size: 0.82rem; max-height: 9em; overflow: auto; background: #fff; padding: 6px 8px; border-radius: 6px; margin: 0 0 8px; }
+.approval .buttons { display: flex; gap: 8px; }
+.approval .done { font-weight: 600; }
+.approval .done.no { color: var(--bad); }
+.approval .done.yes { color: var(--ok); }
+
+.composer { display: flex; gap: 10px; padding: 14px 22px; border-top: 1px solid var(--line); align-items: flex-end; }
+.composer textarea {
+  flex: 1; resize: none; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; min-height: 48px; max-height: 200px;
+}
+.composer textarea:focus { outline: 2px solid #c9d6f6; border-color: var(--user); }
+button { cursor: pointer; border-radius: 9px; border: 1px solid var(--line); background: #fff; padding: 9px 16px; }
+#send, .approval .approve { background: var(--user); border-color: var(--user); color: #fff; }
+#stop, .approval .reject { color: var(--bad); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.link { border: 0; background: none; padding: 0; color: var(--user); }
+button.link:hover { text-decoration: underline; }
+
+.sessions {
+  width: 270px; flex: none; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 0;
+}
+.sessions-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 16px 8px; }
+.sessions h2 { margin: 0; font-size: 1rem; }
+#session-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+#session-list li { padding: 9px 16px; cursor: pointer; border-left: 3px solid transparent; }
+#session-list li:hover { background: #f6f7f9; }
+#session-list li.active { background: #eef2fc; border-left-color: var(--user); }
+#session-list .t { font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#session-list .m { font-size: 0.78rem; color: var(--muted); }
+#session-list .none { color: var(--muted); font-size: 0.88rem; cursor: default; }
+.sessions .compact { margin: 8px 16px 0; align-self: flex-start; font-size: 0.92rem; }
+
+@media (max-width: 900px) {
+  .page { flex-direction: column; height: auto; min-height: 100vh; }
+  .sessions { width: 100%; max-height: 220px; }
+  .window { min-height: 80vh; }
+}
