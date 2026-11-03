@@ -28,6 +28,13 @@ Do, in this order, and stop to tell me if any step fails:
 5. Start the web app, confirm the top bar reads `LIVE · <our model>`, and open stage 3 in the
    browser to run "Wrong role" and "Send it" (approve it). Tell me what you saw.
 6. Tell me the exact commands to start the demo on talk day and the one-line mock fallback.
+7. Then the notebook version (HANDOFF.md section 5, "Alternative", and `notebooks/README.md`):
+   install `requirements-notebook.txt` into the same venv, run `pytest -q tests/test_notebook.py
+   tests/test_chatwin.py` (offline, fake model), then execute `notebooks/kestrel_desk.ipynb`
+   top to bottom against our endpoint (`jupyter nbconvert --to notebook --execute --inplace`
+   or open it in Jupyter Lab and Run All) and show me any cell that errors. Start the chat
+   window with `python -m chatwin --stage 3`, open http://127.0.0.1:8777, run "Wrong role" as
+   Engineering, and tell me what you saw. Give me the commands for both formats.
 
 Do not change the UI design, the scenario script, the `Agent(...)` calls in
 `harness/stages.py`, or the `# [stage:N]` marker comments. Report every deviation from

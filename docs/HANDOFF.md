@@ -81,6 +81,18 @@ Then verify, in this order, stopping at the first failure:
 (the role gate denies, the approval request fires, the limit trips, the saved session resumes).
 28 checks should pass. Run `live_smoke.py 3` to run one stage.
 
+**Both presentation formats share this setup.** The web app above is one; the notebook
+version is the other (section 5, "Alternative"). For the notebook version, additionally:
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements-notebook.txt
+.venv\Scripts\python -m pytest -q tests\test_notebook.py tests\test_chatwin.py   # offline, fake model
+.venv\Scripts\python -m jupyter lab notebooks\kestrel_desk.ipynb                   # then Run All
+.venv\Scripts\python -m chatwin --stage 3                                           # the chat window alone, http://127.0.0.1:8777
+```
+
+Pick the format on the day by what you start; `.env`, the data and the scenarios are the same.
+
 ## 4. If the endpoint misbehaves
 
 Symptoms and where to look. All fixes live in `harness/llm.py` (the `OpenAICompatibleLLM`
